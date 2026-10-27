@@ -8,7 +8,7 @@ test -z "$(git status --porcelain --untracked-files=no)" || { echo 'Commit sourc
 npm run build
 node scripts/package-release.mjs
 ssh "$task_host" "mkdir -p /opt/d500-web/releases/$task_release"
-tar -C dist -czf - . | ssh "$task_host" "tar -xzf - -C /opt/d500-web/releases/$task_release"
+COPYFILE_DISABLE=1 tar --no-xattrs --no-acls -C dist -czf - . | ssh "$task_host" "tar -xzf - -C /opt/d500-web/releases/$task_release"
 scp deploy/compose.yml "$task_host:/opt/d500-web/compose.yml"
 scp deploy/nginx.conf "$task_host:/opt/d500-web/nginx.conf"
 ssh "$task_host" bash -s -- "$task_release" <<'REMOTE'

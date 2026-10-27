@@ -18,6 +18,11 @@ describe('DAT integrity', () => {
     expect(parsed.channels[0].name).toBe('测试信道');
     expect(parsed.channels[0].rxTone).toBe('88.5');
   });
+  it('preserves a UTF-8 BOM and alternative whitespace in unchanged files', () => {
+    const text = '\uFEFF' + fixture().replaceAll('  ', '\t');
+    const { channels, template } = parseDat(text);
+    expect(exportDat(channels, template)).toBe(text);
+  });
   it('changes only the intended frequency bytes and retains unknown fields', () => {
     const text = fixture(), { channels, template } = parseDat(text), before = parseRows(text);
     channels[0].rx = '439.55000';
@@ -56,6 +61,13 @@ describe('DAT integrity', () => {
     const rows = parseRows(exportDat([...channels, duplicate], template));
     expect(rows[17].slice(3)).toEqual(template.rows[0].slice(3));
     expect(rows[273].slice(3)).toEqual(template.rows[256].slice(3));
+  });
+  it('moves a channel without losing unknown flags and clears its old slot', () => {
+    const { channels, template } = parseDat(fixture());
+    const rows = parseRows(exportDat([{ ...channels[0], slot: 19 }], template));
+    expect(rows[19].slice(3)).toEqual(template.rows[0].slice(3));
+    expect(rows[275].slice(3)).toEqual(template.rows[256].slice(3));
+    expect(rows[0].slice(3)).toEqual(Array(16).fill(255));
   });
   for (const name of ['KTC.dat', '出厂值参考.dat']) {
     const path = `.deploy/private-fixtures/${name}`;

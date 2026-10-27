@@ -1,0 +1,45 @@
+{
+  "checked_at": "2026-10-27 Asia/Shanghai",
+  "scope": "ZASTONE 即时通 D500 旧版 / V1（无航空 AM 接收）",
+  "downloads": [
+    {
+      "page": "https://www.zastone.com.cn/download/showdownload.php?id=197",
+      "download_url": "https://www.zastone.com.cn/app/system/entrance.php?m=include&c=access&a=dodown&lang=cn&id=197",
+      "server_filename": "1745483383.rar",
+      "local_file": "D500_V1_official_CPS.rar",
+      "bytes": 2411947,
+      "sha256": "a143a3679f491ea09d587f7f4d11131e2fbea3f8fe3a9502cea6189cb642ba44"
+    },
+    {
+      "page": "https://www.zastone.com.cn/download/showdownload.php?id=208",
+      "download_url": "https://www.zastone.com.cn/app/system/entrance.php?m=include&c=access&a=dodown&lang=cn&id=208",
+      "server_filename": "1752287574.zip",
+      "local_file": "D500_official_USB_driver.zip",
+      "bytes": 4289630,
+      "sha256": "d617041c7ffbf516cd095138ef3bf2fb9b80781fecb43e5fc60617515ad9b2df"
+    },
+    {
+      "page": "https://www.zastone.com.cn/download/showdownload.php?id=205",
+      "download_url": "https://www.zastone.com.cn/app/system/entrance.php?m=include&c=access&a=dodown&lang=cn&id=205",
+      "server_filename": "1747623922.pdf",
+      "local_file": "D500_official_manual_CN.pdf",
+      "bytes": 5967416,
+      "sha256": "5d804b5bd3ec4b459dad7cda061f14a3d6de6f4f13daaab133a2266d84d31c74"
+    },
+    {
+      "page": "https://www.zastone.com.cn/download/showdownload.php?id=204&lang=en",
+      "download_url": "https://www.zastone.com.cn/app/system/entrance.php?m=include&c=access&a=dodown&lang=en&id=204",
+      "server_filename": "1747562573.pdf",
+      "local_file": "D500_official_manual_EN.pdf",
+      "bytes": 5145414,
+      "sha256": "1cc44d906b10108c47a8f83b3962e45589e57b084382149e0691abd66ee8717e"
+    }
+  ],
+  "upstream": {
+    "repository": "https://github.com/Liuli-Lumine/K1toD500",
+    "commit": "e65cbb309986f0f37babaae7fac77f9fd21b5ab1",
+    "license": "GPL-3.0",
+    "v1_compatibility": "unverified; README points to 2026 V2.0 CPS",
+    "archive": "K1toD500_source.zip"
+  }
+}

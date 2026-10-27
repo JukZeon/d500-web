@@ -21,4 +21,4 @@ https://sheetjs.com / https://git.sheetjs.com/sheetjs/sheetjs
 
 Version 0.20.3 is vendored from the official CDN. Apache-2.0 license and distribution notices are included inside vendor/xlsx-0.20.3.tgz.
 
-React (MIT), Vite (MIT), Lucide (ISC), Vitest (MIT), and Playwright (Apache-2.0) retain their package license files. Official Zastone software, drivers and manuals are research downloads only and are not distributed in the application or source repository.
+React (MIT), Vite (MIT), Lucide (ISC), Vitest (MIT), and fflate (MIT) retain their package license files. IBM Plex Sans and IBM Plex Mono are distributed under SIL Open Font License 1.1; the license is included in public/FONT-LICENSE.txt. Official Zastone software, drivers and manuals are research downloads only and are not distributed in the application or source repository.

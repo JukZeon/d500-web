@@ -9,8 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "npm run typecheck && vite build",
-    "preview": "vite preview --host 127.0.0.1",
-    "test:e2e": "playwright test"
+    "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
@@ -22,7 +21,6 @@
     "xlsx": "file:vendor/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.1",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -30,5 +28,6 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
-  }
+  },
+  "author": "BA7KTC / JukZeon"
 }
