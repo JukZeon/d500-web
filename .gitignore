@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+.env*
+!.env.example
+research/*.rar
+research/*.zip
+research/*.pdf
+research/K1toD500_*
+playwright-report/
+test-results/
+*.log
+.deploy/

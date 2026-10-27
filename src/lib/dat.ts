@@ -1,0 +1,127 @@
+/** DAT field layout ported from Liuli-Lumine/K1toD500, GPL-3.0.
+ * Upstream e65cbb309986f0f37babaae7fac77f9fd21b5ab1; see THIRD_PARTY.md.
+ * This implementation preserves the imported template and untouched bytes.
+ */
+import { decodeName, encodeName } from './encoding';
+import { type Channel, type DatTemplate, type Issue, type Power, newChannel, slotLabel } from './model';
+
+export const DCS_CODES = '023 025 026 031 032 036 043 047 051 053 054 065 071 072 073 074 114 115 116 122 125 131 132 134 143 145 152 155 156 162 165 172 174 205 212 223 225 226 243 244 245 246 251 252 255 261 263 265 266 271 274 306 311 315 325 331 332 343 346 351 356 364 365 371 411 412 413 423 431 432 445 446 452 454 455 462 464 465 466 503 506 516 523 526 532 546 565 606 612 624 627 631 632 645 654 662 664 703 712 723 731 732 734 743 754'.split(' ');
+export const CTCSS = '67.0 69.3 71.9 74.4 77.0 79.7 82.5 85.4 88.5 91.5 94.8 97.4 100.0 103.5 107.2 110.9 114.8 118.8 123.0 127.3 131.8 136.5 141.3 146.2 151.4 156.7 159.8 162.2 165.5 167.9 171.3 173.8 177.3 179.9 183.5 186.2 189.9 192.8 196.6 199.5 203.5 206.5 210.7 218.1 225.7 229.1 233.6 241.8 250.3 254.1'.split(' ');
+const sameRadioFields = (a: Channel, b: Channel) => ['name', 'rx', 'tx', 'rxTone', 'txTone', 'power', 'bandwidth', 'busy'].every(k => a[k as keyof Channel] === b[k as keyof Channel]);
+export function parseRows(text: string): number[][] {
+  if (text.length > 2_000_000) throw new Error('DAT 文件超过 2 MB，请确认选择的是 D500 写频文件。');
+  const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/).filter(l => l.trim());
+  if (lines.length !== 1025) throw new Error(`DAT 有 ${lines.length} 行；当前支持 D500 的 1025 行文本格式，未修改此文件。`);
+  return lines.map((line, i) => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length !== 19 || parts.some(v => !/^\d+$/.test(v))) throw new Error(`DAT 第 ${i + 1} 行应为 19 个十进制整数字段。`);
+    const row = parts.map(Number);
+    if (row[0] !== Math.floor(i / 16) || row[1] !== i % 16 || row[2] !== i) throw new Error(`DAT 第 ${i + 1} 行地址不连续，无法安全解析。`);
+    if (row.slice(3).some(n => n > 255)) throw new Error(`DAT 第 ${i + 1} 行包含超出字节范围的数据。`);
+    return row;
+  });
+}
+export function encodeFrequency(value: string): number[] {
+  if (!/^\d{1,3}(?:\.\d{1,5})?$/.test(value.trim())) throw new Error('频率需为 MHz 数值，最多 5 位小数（10 Hz 精度）');
+  const n = Math.round(Number(value) * 100000);
+  if (n <= 0 || n > 99999999) throw new Error('频率超出可编码范围');
+  return n.toString().padStart(8, '0').match(/../g)!.map(pair => parseInt(pair, 16)).reverse();
+}
+export function decodeFrequency(bytes: number[]): string {
+  if (bytes.every(v => v === 255)) return '';
+  if (bytes.some(v => (v >> 4) > 9 || (v & 15) > 9)) throw new Error('频率含非 BCD 数据');
+  const str = [...bytes].reverse().map(v => v.toString(16).padStart(2, '0')).join('');
+  const n = Number(str) / 100000;
+  if (!n) throw new Error('频率为零');
+  return n.toFixed(5);
+}
+export function encodeTone(text: string): number {
+  const t = text.trim().toUpperCase().replace(/HZ$/, '').trim();
+  if (!t || ['OFF', '-', '无', '0'].includes(t)) return 0;
+  const dcs = /^D?(\d{3})([NI])?$/.exec(t);
+  if (dcs && (t.startsWith('D') || !!dcs[2])) {
+    const i = DCS_CODES.indexOf(dcs[1]);
+    if (i < 0) throw new Error('DCS 编码不在标准码表中');
+    return i + 1 + (dcs[2] === 'I' ? 105 : 0);
+  }
+  if (!/^\d{2,3}(?:\.\d)?$/.test(t) || Number(t) < 60 || Number(t) > 260) throw new Error('亚音使用 88.5 或 D023N / D023I 格式');
+  return Math.round(Number(t) * 10);
+}
+export function decodeTone(value: number): string {
+  if (!value) return '';
+  if (value <= 210) return `D${DCS_CODES[(value - 1) % 105]}${value > 105 ? 'I' : 'N'}`;
+  return (value / 10).toFixed(1);
+}
+export function parseDat(text: string, fileName = 'D500.dat'): { channels: Channel[]; template: DatTemplate; warnings: string[] } {
+  const rows = parseRows(text);
+  const channels: Channel[] = [];
+  const warnings: string[] = [];
+  for (let slot = 0; slot < 200; slot++) {
+    const p = rows[slot].slice(3);
+    if (p.every(v => v === 255)) continue;
+    try {
+      const rx = decodeFrequency(p.slice(0, 4));
+      if (!rx) throw new Error('接收频率为空');
+      const tx = decodeFrequency(p.slice(4, 8));
+      let name = '';
+      try { name = decodeName(rows[256 + slot].slice(3)); }
+      catch { warnings.push(`信道 ${slotLabel(slot)} 名称不能按 GBK 解码；未编辑时保留原始名称字节。`); }
+      const power: Power = (['high', 'mid', 'low'] as const)[p[14]] ?? `raw:${p[14]}`;
+      channels.push({ ...newChannel(slot), name, rx, tx, rxTone: decodeTone(p[8] | p[9] << 8), txTone: decodeTone(p[10] | p[11] << 8), power, bandwidth: p[15] & 64 ? 'narrow' : 'wide', busy: !!(p[15] & 8) });
+    } catch (e) {
+      // Do not silently drop a record and then clear it on export.
+      throw new Error(`信道 ${slotLabel(slot)} 无法解析：${e instanceof Error ? e.message : String(e)}。已停止导入，原文件保持不变。`);
+    }
+  }
+  return { channels, template: { rows, original: text, originalChannels: structuredClone(channels), fileName }, warnings };
+}
+export function validateChannels(channels: Channel[]): Issue[] {
+  const issues: Issue[] = [];
+  const slots = new Set<number>();
+  for (const c of channels) {
+    const add = (field: string, message: string, severity: 'error' | 'warning' = 'error') => issues.push({ slot: c.slot, field, message, severity });
+    if (!Number.isInteger(c.slot) || c.slot < 0 || c.slot > 199) add('slot', '信道编号必须在 000–199 之间');
+    if (slots.has(c.slot)) add('slot', '信道编号重复');
+    slots.add(c.slot);
+    try { encodeName(c.name); } catch (e) { add('name', (e as Error).message); }
+    for (const f of ['rx', 'tx'] as const) {
+      if (f === 'tx' && c.tx === '') continue;
+      try { encodeFrequency(c[f]); } catch (e) { add(f, (e as Error).message); }
+    }
+    for (const f of ['rxTone', 'txTone'] as const) try { encodeTone(c[f]); } catch (e) { add(f, (e as Error).message); }
+    if (!['high', 'mid', 'low'].includes(c.power) && !/^raw:\d{1,3}$/.test(c.power)) add('power', '功率值无效');
+    if (c.bandwidth !== 'wide' && c.bandwidth !== 'narrow') add('bandwidth', '带宽值无效');
+  }
+  return issues;
+}
+export function exportDat(channels: Channel[], template: DatTemplate | null): string {
+  if (!template) throw new Error('请先导入本机原厂软件导出的 DAT，作为导出模板。这样可以保留旧版机器的其他设置。');
+  const issues = validateChannels(channels).filter(i => i.severity === 'error');
+  if (issues.length) throw new Error(`信道 ${slotLabel(issues[0].slot)}：${issues[0].message}`);
+  // Revalidate saved project metadata before trusting the stored template.
+  const rows = parseRows(template.original);
+  const original = new Map(parseDat(template.original).channels.map(c => [c.slot, c]));
+  const current = new Map(channels.map(c => [c.slot, c]));
+  if (current.size === original.size && channels.every(c => original.has(c.slot) && sameRadioFields(c, original.get(c.slot)!))) return template.original;
+  for (let slot = 0; slot < 200; slot++) {
+    const c = current.get(slot), before = original.get(slot);
+    if (!c) {
+      if (before) { rows[slot].fill(255, 3); rows[256 + slot].fill(255, 3); }
+      continue;
+    }
+    const p = before ? rows[slot].slice(3) : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 68];
+    if (!before || c.rx !== before.rx) p.splice(0, 4, ...encodeFrequency(c.rx));
+    if (!before || c.tx !== before.tx) p.splice(4, 4, ...(c.tx ? encodeFrequency(c.tx) : [255, 255, 255, 255]));
+    for (const [field, offset] of [['rxTone', 8], ['txTone', 10]] as const) if (!before || c[field] !== before[field]) {
+      const v = encodeTone(c[field]); p[offset] = v & 255; p[offset + 1] = v >> 8;
+    }
+    if (!before || c.power !== before.power) p[14] = c.power.startsWith('raw:') ? Number(c.power.slice(4)) : ['high', 'mid', 'low'].indexOf(c.power);
+    if (!before || c.bandwidth !== before.bandwidth) p[15] = p[15] & ~64 | (c.bandwidth === 'narrow' ? 64 : 0);
+    if (!before || c.busy !== before.busy) p[15] = p[15] & ~8 | (c.busy ? 8 : 0);
+    rows[slot].splice(3, 16, ...p);
+    if (!before || c.name !== before.name) {
+      const bytes = encodeName(c.name); rows[256 + slot].splice(3, 16, ...Array.from({ length: 16 }, (_, i) => bytes[i] ?? 255));
+    }
+  }
+  return rows.map(r => r.map(n => ` ${n} `).join('')).join('\r\n') + '\r\n';
+}
