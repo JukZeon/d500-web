@@ -44,7 +44,7 @@ cd /opt/d500-web
 test -f previous-release
 ln -sfn "$(cat previous-release)" current.next
 mv -Tf current.next current
-docker compose restart d500-web
+docker compose up -d --force-recreate d500-web
 docker exec d500-web wget -q -O - http://127.0.0.1:8080/health
 ```
 

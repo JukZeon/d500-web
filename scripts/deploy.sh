@@ -17,8 +17,13 @@ cd /opt/d500-web
 if [ -L current ]; then readlink current > previous-release; fi
 ln -sfn "releases/$1" current.next
 mv -Tf current.next current
-docker compose up -d
+docker compose up -d --force-recreate d500-web
 docker exec d500-web nginx -t
-docker exec d500-web wget -q -O - http://127.0.0.1:8080/health
+for task_try in {1..15}; do
+  if docker exec d500-web wget -q -O - http://127.0.0.1:8080/health; then exit 0; fi
+  sleep 1
+done
+echo 'Health check failed; the previous release remains available for rollback.' >&2
+exit 1
 REMOTE
 echo "Deployed $task_release. Verify https://d500.example.com/version.json"
