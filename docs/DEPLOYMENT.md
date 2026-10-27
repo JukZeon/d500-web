@@ -57,3 +57,6 @@ docker exec d500-web wget -q -O - http://127.0.0.1:8080/health
 - `.env` 等隐藏文件不可读，缺失的静态资源返回 404。
 - 浏览器导入、编辑、导出正常；刷新恢复本机草稿。
 - 没有文件上传 API，应用不把 DAT、工作表或方案内容发送到服务器。
+- 连接电台通过浏览器 Web Serial 访问用户选择的本机写频线。HTTPS 响应应包含 `Permissions-Policy: camera=(), microphone=(), geolocation=(), serial=(self)`；NPM 不得额外下发冲突的 `serial=()`。服务器不连接 USB，也不接收读机内容。
+
+v0.3.0-beta.1 更新了容器侧权限头。回退到旧版文件编辑器时，也应恢复对应版本的 `deploy/nginx.conf` 并重建容器。

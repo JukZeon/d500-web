@@ -1,0 +1,181 @@
+import { describe, it, expect } from 'vitest';
+import { parseDat, exportDat, parseRows } from './dat';
+import { emptyWorkspace, newChannel } from './model';
+import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HELLO, planWrite, readCommand, snapshotDat, type RadioSnapshot } from './radio';
+import { checkAbort, SerialLink, type RadioLink, type SerialPortLike } from './serial';
+
+function setup() {
+  const blank = Array.from({ length: 1025 }, (_, i) => [i >> 4, i % 16, i, ...Array(16).fill(255)].join(' ')).join('\n');
+  const parsed = parseDat(exportDat([newChannel(0)], parseDat(blank).template));
+  const workspace = { ...emptyWorkspace(), ...parsed };
+  const snapshot: RadioSnapshot = { schema: 'd500-radio-read-v1', capturedAt: new Date().toISOString(), hardwareVerified: false,
+    identity: [], bytes: parsed.template.rows.slice(0, CONFIG_SIZE / 16).flatMap(r => r.slice(3)) };
+  return { workspace, snapshot };
+}
+class RadioSimulator implements RadioLink {
+  queue: number[] = [];
+  sent: number[][] = [];
+  identity = Array(49).fill(0);
+  password = Array(16).fill(0x20);
+  wrongAddress = false; wrongAck = false; ignoreWrite = false;
+  constructor(public memory: number[], private prefix = true) { this.identity[0] = 1; this.identity[48] = 0x55; }
+  async write(bytes: Uint8Array, signal?: AbortSignal) {
+    checkAbort(signal); this.sent.push([...bytes]);
+    if (bytes.length === 8 && bytes[0] === HELLO[0]) this.queue.push(...(this.prefix ? [6] : []), ...this.identity);
+    else if (bytes[0] === 0x53) {
+      const address = bytes[1] << 8 | bytes[2];
+      const data = address === 0x3df0 ? this.password : this.memory.slice(address, address + bytes[3]);
+      this.queue.push(...(this.prefix ? [6] : []), 0x58, bytes[1], this.wrongAddress ? bytes[2] ^ 16 : bytes[2], bytes[3], ...data);
+    } else if (bytes[0] === 0x58) {
+      if (!this.ignoreWrite) this.memory.splice(bytes[1] << 8 | bytes[2], 16, ...bytes.slice(4));
+      this.queue.push(this.wrongAck ? 0x15 : 6);
+    }
+  }
+  async read(count: number, signal?: AbortSignal) { checkAbort(signal); if (this.queue.length < count) throw new Error('模拟响应不足'); return Uint8Array.from(this.queue.splice(0, count)); }
+  writes() { return this.sent.filter(p => p[0] === 0x58); }
+}
+
+describe('experimental D500 protocol, simulator only', () => {
+  it('keeps production writes closed pending hardware evidence', () => { expect(HARDWARE_WRITE_VERIFIED).toBe(false); });
+  it('encodes bounded read commands and refuses unaligned or out-of-range addresses', () => {
+    expect([...readCommand(0x3df0, 16)]).toEqual([0x53, 0x3d, 0xf0, 16]);
+    expect(() => readCommand(1, 64)).toThrow(); expect(() => readCommand(0x4000, 64)).toThrow();
+  });
+  for (const prefix of [true, false]) it(`reads all 200 configuration blocks with ACK prefix ${prefix}`, async () => {
+    const { snapshot } = setup(), io = new RadioSimulator([...snapshot.bytes], prefix);
+    const updates: number[] = [];
+    const result = await new D500Protocol(io).readImage(done => updates.push(done));
+    expect(result.bytes).toEqual(snapshot.bytes); expect(updates.at(-1)).toBe(CONFIG_SIZE);
+    expect(io.sent.filter(p => p[0] === 0x53)).toHaveLength(201); expect(io.writes()).toHaveLength(0);
+    expect(io.sent[0]).toEqual([...HELLO]);
+  });
+  it('stops on unknown identity, malformed band data, passwords, or wrong response addresses', async () => {
+    const { snapshot } = setup();
+    for (const mutate of [(io: RadioSimulator) => { io.identity[48] = 0; }, (io: RadioSimulator) => { io.identity[17] = 250; }, (io: RadioSimulator) => { io.password[0] = 0x31; }, (io: RadioSimulator) => { io.wrongAddress = true; }]) {
+      const io = new RadioSimulator([...snapshot.bytes]); mutate(io);
+      await expect(new D500Protocol(io).readImage(() => {})).rejects.toThrow();
+      expect(io.writes()).toHaveLength(0);
+    }
+  });
+  it('cancellation sends no further packets', async () => {
+    const { snapshot } = setup(), io = new RadioSimulator([...snapshot.bytes]), abort = new AbortController(); abort.abort();
+    await expect(new D500Protocol(io).readImage(() => {}, abort.signal)).rejects.toThrow(); expect(io.sent).toHaveLength(0);
+  });
+  it('round-trips the read configuration into a DAT, marking unread rows FF', () => {
+    const { snapshot } = setup(), rows = parseRows(snapshotDat(snapshot));
+    expect(rows.slice(0, 800).flatMap(r => r.slice(3))).toEqual(snapshot.bytes);
+    expect(rows.slice(800).every(r => r.slice(3).every(v => v === 255))).toBe(true);
+    expect(parseDat(snapshotDat(snapshot)).channels).toHaveLength(1);
+    expect(() => snapshotDat({ ...snapshot, bytes: [1] })).toThrow('备份');
+  });
+  it('previews only changed editable blocks, preserving fresh unknown bytes', () => {
+    const { snapshot, workspace } = setup();
+    expect(planWrite(snapshot, workspace).blocks).toHaveLength(0);
+    workspace.channels[0].rx = '439.55000'; snapshot.bytes[15] ^= 0x80;
+    const plan = planWrite(snapshot, workspace);
+    expect(plan.channels).toEqual([0]); expect(plan.blocks).toHaveLength(1);
+    expect(plan.blocks[0].after[15]).toBe(snapshot.bytes[15]);
+    expect(plan.changedBytes).toBeGreaterThan(0);
+  });
+  it('detects conflicting device values and requires a DAT baseline', () => {
+    const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000'; snapshot.bytes[1] = 0x99;
+    expect(() => planWrite(snapshot, workspace)).toThrow('冲突');
+    expect(() => planWrite(snapshot, { ...workspace, template: null })).toThrow('模板');
+  });
+  it('compares whole frequency fields and merges unrelated flag bits without inventing values', () => {
+    const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000';
+    // A change to an otherwise untouched byte in the same BCD field must conflict.
+    snapshot.bytes[3] = 0x15;
+    expect(() => planWrite(snapshot, workspace)).toThrow('冲突');
+    const other = setup(); other.workspace.channels[0].bandwidth = 'wide'; other.snapshot.bytes[15] ^= 4;
+    const plan = planWrite(other.snapshot, other.workspace);
+    expect(plan.blocks[0].after[15] & 4).toBe(other.snapshot.bytes[15] & 4);
+    expect(plan.blocks[0].after[15] & 64).toBe(0);
+  });
+  it('plans deletion of channel and name blocks while retaining all other regions', () => {
+    const { snapshot, workspace } = setup(); workspace.channels = [];
+    const plan = planWrite(snapshot, workspace);
+    expect(plan.blocks.map(b => b.address)).toEqual([0]);
+    expect(plan.blocks[0].after.every(v => v === 255)).toBe(true);
+  });
+  it('candidate writes require fresh preflight, backup, ACK, and exact readback', async () => {
+    const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000';
+    const plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]); let backedUp = false;
+    await new D500Protocol(io).writeCandidate(plan, async fresh => {
+      expect(io.writes()).toHaveLength(0); expect(fresh.bytes).toEqual(snapshot.bytes); backedUp = true;
+    }, () => {});
+    expect(backedUp).toBe(true); expect(io.writes()).toHaveLength(1);
+    expect(io.memory.slice(0, 16)).toEqual(plan.blocks[0].after);
+  });
+  it('sends no write when a fresh preflight conflicts or the backup fails', async () => {
+    const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000'; const plan = planWrite(snapshot, workspace);
+    const changed = new RadioSimulator([...snapshot.bytes]); changed.memory[0] ^= 1;
+    await expect(new D500Protocol(changed).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow('已变化');
+    expect(changed.writes()).toHaveLength(0);
+    const io = new RadioSimulator([...snapshot.bytes]);
+    await expect(new D500Protocol(io).writeCandidate(plan, async () => { throw new Error('磁盘满'); }, () => {})).rejects.toThrow('磁盘满');
+    expect(io.writes()).toHaveLength(0);
+  });
+  it('stops without retrying when a write ACK or readback fails', async () => {
+    const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000'; workspace.channels.push(newChannel(1)); const plan = planWrite(snapshot, workspace);
+    for (const mode of ['wrongAck', 'ignoreWrite'] as const) {
+      const io = new RadioSimulator([...snapshot.bytes]); io[mode] = true;
+      await expect(new D500Protocol(io).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow();
+      expect(io.writes()).toHaveLength(1);
+    }
+  });
+  it('rejects forged write plans outside the allowlist before communicating', async () => {
+    const { snapshot, workspace } = setup(), plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]);
+    plan.blocks.push({ address: 0x3df0, before: Array(16).fill(32), after: Array(16).fill(0) });
+    await expect(new D500Protocol(io).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow('未确认');
+    expect(io.sent).toHaveLength(0);
+  });
+  it('rejects forged reserved bits, unknown setting bytes, and duplicate blocks', async () => {
+    const { snapshot, workspace } = setup();
+    for (const row of [0, 224, 500]) {
+      const plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]);
+      const before = snapshot.bytes.slice(row * 16, row * 16 + 16), after = [...before]; after[row === 0 ? 14 : 1] ^= row === 0 ? 0x80 : 1;
+      plan.blocks.push({ address: row * 16, before, after });
+      await expect(new D500Protocol(io).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow('未确认');
+      expect(io.sent).toHaveLength(0);
+    }
+    workspace.channels[0].rx = '439.55000'; const plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]);
+    plan.blocks.push(plan.blocks[0]);
+    await expect(new D500Protocol(io).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow('未确认');
+    expect(io.sent).toHaveLength(0);
+  });
+});
+
+describe('Web Serial transport', () => {
+  function port() {
+    let input!: ReadableStreamDefaultController<Uint8Array>;
+    const output: number[] = [];
+    const device: SerialPortLike = { readable: new ReadableStream({ start(c) { input = c; } }),
+      writable: new WritableStream({ write(bytes) { output.push(...bytes); } }),
+      async open() {}, async close() {}, getInfo() { return {}; } };
+    return { device, output, input };
+  }
+  it('assembles fragmented responses and keeps surplus bytes for the next read', async () => {
+    const { device, input } = port(), link = await SerialLink.open(device, () => {}, 100);
+    const reading = link.read(4); input.enqueue(Uint8Array.of(1)); input.enqueue(Uint8Array.of(2, 3, 4, 5));
+    expect([...await reading]).toEqual([1, 2, 3, 4]); expect([...await link.read(1)]).toEqual([5]); await link.close();
+  });
+  it('times out, cancels pending reads, rejects unplugged streams, and releases locks', async () => {
+    const { device } = port(), link = await SerialLink.open(device, () => {}, 15);
+    await expect(link.read(1)).rejects.toThrow('超时');
+    const controller = new AbortController(), reading = link.read(1, controller.signal); controller.abort();
+    await expect(reading).rejects.toThrow(); await link.close();
+    await expect(link.read(1)).rejects.toThrow('关闭');
+    expect(device.readable?.locked).toBe(false); expect(device.writable?.locked).toBe(false);
+    const disconnected = port(), other = await SerialLink.open(disconnected.device, () => {});
+    disconnected.input.close(); await expect(other.read(1)).rejects.toThrow('断开'); await other.close();
+  });
+  it('writes bytes in order, rejects concurrent readers, and honors pre-cancelled sends', async () => {
+    const { device, output, input } = port(), link = await SerialLink.open(device, () => {});
+    const sending = link.write(Uint8Array.of(0x53, 0, 0, 64));
+    await expect(link.write(Uint8Array.of(1))).rejects.toThrow('同时'); await sending; expect(output).toEqual([0x53, 0, 0, 64]);
+    const first = link.read(1); await expect(link.read(1)).rejects.toThrow('同时'); input.enqueue(Uint8Array.of(6)); await first;
+    const controller = new AbortController(); controller.abort(); await expect(link.write(Uint8Array.of(9), controller.signal)).rejects.toThrow();
+    expect(output).toHaveLength(4); await link.close();
+  });
+});

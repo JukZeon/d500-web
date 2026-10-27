@@ -1,0 +1,24 @@
+{
+  "sha256": "c2d7e2d42a78d949b03d7557b0785139a856485d20c0cb12e9ae43979a3c3559",
+  "method": "static constant extraction; not hardware validation",
+  "serial": {
+    "address": "0x426b6c",
+    "settings": "9600,N,8,1"
+  },
+  "handshake": {
+    "start": "0x465201",
+    "end": "0x46527d",
+    "bytes": [
+      85,
+      32,
+      33,
+      1,
+      35,
+      255,
+      220,
+      2
+    ],
+    "hex": "55 20 21 01 23 FF DC 02"
+  },
+  "hardwareTested": false
+}
