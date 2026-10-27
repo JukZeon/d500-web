@@ -38,10 +38,26 @@ describe('spreadsheets', () => {
     const result = importWorkbook(XLSX.write(book, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer, 'legacy.xlsx');
     expect(result.channels[0].rxTone).toBe('D252N');
   });
+  it('separates analog frequency and digital code columns, including inverted DCS and advanced flags', () => {
+    const channel = { ...newChannel(7), rxTone: '94.8', txTone: 'D252I', pttId: 3, scanAdd: false, busy: true, signalCode: 12, optionalSignal: 2, muteMode: 1, scramble: true };
+    const bytes = exportWorkbook([channel], 'test');
+    const book = XLSX.read(bytes, { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(book.Sheets['D500信道']);
+    expect(rows[0]['接收亚音频类型']).toBe('CTCSS');
+    expect(rows[0]['接收亚音频(Hz)']).toBe('94.8');
+    expect(rows[0]['发送亚音数码']).toBe('D252I');
+    expect(importWorkbook(bytes.buffer as ArrayBuffer, 'test.xlsx').channels[0]).toEqual(channel);
+  });
+  it('rejects medium power for the V1 model', () => {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['接收频率', '功率'], [438.5, '中']]), 'D500');
+    expect(() => importWorkbook(XLSX.write(book, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer, 'bad.xlsx')).toThrow('两档');
+  });
 });
 describe('project backup', () => {
   it('restores a valid project', () => expect(parseProject(JSON.stringify(demoWorkspace())).channels).toHaveLength(6));
   it('rejects untrusted malformed project metadata', () => {
     expect(() => parseProject('{"schema":1,"name":"x","channels":[{}]}')).toThrow('字段');
   });
+
 });

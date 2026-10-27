@@ -23,6 +23,6 @@ export function encodeName(text: string): number[] {
     if (!bytes || char === '\0' || /[\r\n\t]/.test(char)) throw new Error(`名称包含电台不支持的字符“${char}”`);
     out.push(...bytes);
   }
-  if (out.length > 16) throw new Error(`名称占 ${out.length} 字节，D500 最多允许 16 字节（通常为 8 个汉字）`);
+  if (out.length > 16) throw new Error(`名称占 ${out.length} 字节，超出 DAT 名称区的 16 字节容量`);
   return out;
 }

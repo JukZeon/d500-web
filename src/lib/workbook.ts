@@ -1,8 +1,8 @@
 import * as XLSX from 'xlsx';
-import { type Channel, type Power, newChannel, slotLabel } from './model';
+import { type Channel, type Power, newChannel, slotLabel, PTT_OPTIONS, SIGNAL_OPTIONS, MUTE_OPTIONS } from './model';
 import { validateChannels } from './dat';
 
-export const HEADERS = ['信道编号(0-199)', '信道名称', '接收频率(MHz)', '发射频率(MHz)', '接收亚音', '发射亚音', '功率', '带宽', '繁忙禁发', '分组', '备注'];
+export const HEADERS = ['信道编号(0-199)', '信道名称', '接收频率(MHz)', '发射频率(MHz)', '接收亚音频类型', '接收亚音频(Hz)', '接收亚音数码', '发送亚音类型', '发送亚音频(Hz)', '发送亚音数码', '功率', '带宽', '繁忙禁发', '扫描添加', 'PTT-ID', '信令码组', '可选信令', '静音方式', '扰频', '分组', '备注'];
 const clean = (s: unknown) => String(s ?? '').trim();
 const key = (s: unknown) => clean(s).toLowerCase().replace(/[\s_()（）\-./]/g, '');
 const asFreq = (v: unknown): string => {
@@ -18,12 +18,11 @@ const bool = (v: unknown) => ['1', 'true', 'on', 'yes', '是', '开', '开启', 
 const power = (v: unknown): Power => {
   const s = clean(v).toLowerCase();
   if (['高', 'h', 'high', '0', '高功率'].includes(s)) return 'high';
-  if (['中', 'm', 'mid', 'middle', '1', '中功率'].includes(s)) return 'mid';
-  if (/^raw:\d{1,3}$/.test(s)) return s as Power;
-  if (!s || ['低', 'l', 'low', '2', '低功率'].includes(s)) return 'low';
-  throw new Error(`未知功率“${clean(v)}”，请使用 高 / 中 / 低`);
+  if (/^raw:[0-3]$/.test(s)) return s as Power;
+  if (!s || ['低', 'l', 'low', '1', '低功率'].includes(s)) return 'low';
+  throw new Error(`旧版 D500 仅支持高、低两档功率，无法使用“${clean(v)}”`);
 };
-type Field = 'slot' | 'name' | 'rx' | 'tx' | 'rxTone' | 'txTone' | 'rxType' | 'txType' | 'rxDcs' | 'txDcs' | 'power' | 'bandwidth' | 'busy' | 'group' | 'note';
+type Field = 'slot' | 'name' | 'rx' | 'tx' | 'rxTone' | 'txTone' | 'rxType' | 'txType' | 'rxDcs' | 'txDcs' | 'power' | 'bandwidth' | 'busy' | 'group' | 'note' | 'scanAdd' | 'pttId' | 'signalCode' | 'optionalSignal' | 'muteMode' | 'scramble';
 const aliases: Record<Field, string[]> = {
   slot: ['信道编号0199', '信道编号', '信道号', '信道', 'channel', 'channelnumber', 'no', '#', '序号'],
   name: ['信道名称', '名称', 'name', 'channelname', 'chname'],
@@ -36,6 +35,8 @@ const aliases: Record<Field, string[]> = {
   power: ['功率', '发射功率', '发送功率', 'power', 'txpower'],
   bandwidth: ['带宽', 'bandwidth', 'bw', 'mode', '调制模式'],
   busy: ['繁忙禁发', 'bcl', 'busy', 'busylock', 'busylockout'],
+  scanAdd: ['扫描添加', 'scanadd'], pttId: ['pttid'], signalCode: ['信令码组', 'signalcode'],
+  optionalSignal: ['可选信令', 'optionalsignal'], muteMode: ['静音方式', 'mutemode'], scramble: ['扰频', 'scramble'],
   group: ['分组', 'group', '区域', 'zone', '分类'], note: ['备注', 'note', 'notes', 'comment', '说明'],
 };
 function findColumns(row: unknown[]): Partial<Record<Field, number>> {
@@ -48,7 +49,8 @@ function findColumns(row: unknown[]): Partial<Record<Field, number>> {
 }
 function tone(value: unknown, type: unknown, dcsValue?: unknown): string {
   const s = clean(value).toUpperCase(), t = clean(type).toUpperCase();
-  if (['NONE', 'OFF', '无', '0'].includes(t)) return '';
+  if (['NONE', 'OFF', '无', '关闭', '0'].includes(t)) return '';
+  if (t === 'RAW') return s;
   if (/DCS|数字|数码/.test(t) && clean(dcsValue)) {
     const code = clean(dcsValue).toUpperCase();
     // An explicit N/I suffix is authoritative, even when the type column is DCSH.
@@ -56,8 +58,18 @@ function tone(value: unknown, type: unknown, dcsValue?: unknown): string {
     return 'D' + code.replace(/^D/, '').replace(/[NI]$/, '').padStart(3, '0') + suffix;
   }
   if (!s || s === '-' || s === '0' || s === 'OFF') return '';
-  if (t.includes('DCS')) return 'D' + s.replace(/^D/, '').replace(/[NI]$/, '').padStart(3, '0') + (t.includes('I') || /I$/.test(s) ? 'I' : 'N');
+  if (t.includes('DCS')) return 'D' + s.replace(/^D/, '').replace(/[NI]$/, '').padStart(3, '0') + (/[NI]$/.test(s) ? s.slice(-1) : /反|INV|DCSI|DCS I/.test(t) ? 'I' : 'N');
   return s.replace(/HZ$/, '');
+}
+function enumValue(value: unknown, options: string[], label: string): number {
+  const s = clean(value), index = options.indexOf(s);
+  if (!s) return 0;
+  if (index >= 0) return index;
+  const short = s.toUpperCase();
+  const alias = options.findIndex(v => v.toUpperCase().split(' ').includes(short));
+  if (alias >= 0) return alias;
+  if (/^\d{1,2}$/.test(s)) return Number(s);
+  throw new Error(`${label}“${s}”无效，请使用导出表格中的选项`);
 }
 export interface WorkbookImport { channels: Channel[]; sheetName: string; warnings: string[]; detected: string; providedFields: string[] }
 export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImport {
@@ -82,7 +94,7 @@ export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImp
       const rx = asFreq(get('rx')), tx = columns.tx === undefined ? rx : asFreq(get('tx'));
       const bw = clean(get('bandwidth')).toLowerCase();
       if (bw && !['wide', '宽', '宽带', 'w', 'fm', '25', '25k', '25khz', 'narrow', '窄', '窄带', 'n', 'nfm', '12.5', '12.5k', '12.5khz', '0', '1'].includes(bw)) throw new Error(`表格第 ${i + 1} 行带宽“${bw}”不支持`);
-      const c: Channel = { ...newChannel(slot), name: clean(get('name')), rx, tx, rxTone: tone(get('rxTone'), get('rxType'), get('rxDcs')), txTone: tone(get('txTone'), get('txType'), get('txDcs')), power: power(get('power')), bandwidth: ['wide', '宽', '宽带', 'w', 'fm', '25', '25k', '25khz', '0'].includes(bw) ? 'wide' : 'narrow', busy: bool(get('busy')), group: clean(get('group')), note: clean(get('note')) };
+      const c: Channel = { ...newChannel(slot), name: clean(get('name')), rx, tx, rxTone: tone(get('rxTone'), get('rxType'), get('rxDcs')), txTone: tone(get('txTone'), get('txType'), get('txDcs')), power: power(get('power')), bandwidth: ['wide', '宽', '宽带', 'w', 'fm', '25', '25k', '25khz', '0'].includes(bw) ? 'wide' : 'narrow', busy: bool(get('busy')), scanAdd: columns.scanAdd === undefined ? true : bool(get('scanAdd')), pttId: enumValue(get('pttId'), PTT_OPTIONS, 'PTT-ID'), signalCode: clean(get('signalCode')) ? Number(get('signalCode')) - 1 : 0, optionalSignal: enumValue(get('optionalSignal'), SIGNAL_OPTIONS, '可选信令'), muteMode: enumValue(get('muteMode'), MUTE_OPTIONS, '静音方式'), scramble: bool(get('scramble')), group: clean(get('group')), note: clean(get('note')) };
       channels.push(c);
       if (channels.length > 200) throw new Error('信道超过 200 条，请分成多个方案。');
     }
@@ -90,22 +102,27 @@ export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImp
     const errors = validateChannels(channels).filter(i => i.severity === 'error');
     if (errors.length) throw new Error(`信道 ${slotLabel(errors[0].slot)}：${errors[0].message}（共 ${errors.length} 个问题）`);
     if (isK5) warnings.push('已识别 K5Web 表格：信道 200 对应 D500 的 000，1–199 保持原号。');
-    warnings.push('只转换已支持的信道字段；扫描列表、步进、信令等由原始 DAT 模板保留。');
-    return { channels, sheetName, warnings, detected: isK5 ? 'K5Web / K1' : /csv$/i.test(fileName) ? 'CSV' : 'D500 / 通用表格', providedFields: Object.keys(columns) };
+    if (rows[head].some(v => /信道模式|dtmf解码|扫描列表/i.test(clean(v)))) warnings.push('旧表中的 DMR 模式、DTMF 解码与扫描列表不转换；D500 V1 为模拟电台。未提供的 D500 参数沿用同编号信道。');
+    const providedFields = Object.keys(columns);
+    if (columns.rxType !== undefined || columns.rxDcs !== undefined) providedFields.push('rxTone');
+    if (columns.txType !== undefined || columns.txDcs !== undefined) providedFields.push('txTone');
+    return { channels, sheetName, warnings, detected: isK5 ? 'K5Web / K1' : /csv$/i.test(fileName) ? 'CSV' : 'D500 / 通用表格', providedFields };
   }
   throw new Error('没有找到接收频率列。请使用“下载模板”，或在前 20 行放置“接收频率 / RX Frequency”表头。');
 }
 export function exportWorkbook(channels: Channel[], name: string): Uint8Array {
-  const rows = channels.slice().sort((a, b) => a.slot - b.slot).map(c => [c.slot, c.name, c.rx, c.tx, c.rxTone, c.txTone, ({ high: '高', mid: '中', low: '低' } as Record<string, string>)[c.power] ?? c.power, c.bandwidth === 'wide' ? '宽带' : '窄带', c.busy ? '是' : '否', c.group, c.note]);
+  const toneColumns = (s: string) => !s ? ['关闭', '', ''] : /^D\d{3}[NI]$/i.test(s) ? ['DCS', '', s] : /^RAW:/i.test(s) ? ['RAW', s, ''] : ['CTCSS', s, ''];
+  const rows = channels.slice().sort((a, b) => a.slot - b.slot).map(c => [c.slot, c.name, c.rx, c.tx, ...toneColumns(c.rxTone), ...toneColumns(c.txTone), ({ high: '高', low: '低' } as Record<string, string>)[c.power] ?? c.power, c.bandwidth === 'wide' ? '宽带' : '窄带', c.busy ? '是' : '否', c.scanAdd ? '是' : '否', PTT_OPTIONS[c.pttId] ?? c.pttId, c.signalCode + 1, SIGNAL_OPTIONS[c.optionalSignal] ?? c.optionalSignal, MUTE_OPTIONS[c.muteMode] ?? c.muteMode, c.scramble ? '是' : '否', c.group, c.note]);
   const sheet = XLSX.utils.aoa_to_sheet([HEADERS, ...rows]);
-  sheet['!cols'] = [14, 20, 20, 20, 14, 14, 10, 10, 12, 16, 40].map(wch => ({ wch }));
-  sheet['!autofilter'] = { ref: `A1:K${rows.length + 1}` };
+  sheet['!cols'] = HEADERS.map((_, i) => ({ wch: i === 20 ? 40 : i === 1 ? 20 : 18 }));
+  sheet['!autofilter'] = { ref: `A1:U${rows.length + 1}` };
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, sheet, 'D500信道');
   const info = XLSX.utils.aoa_to_sheet([
     ['D500 Workbench 信道表', name], ['编号', 'D500 原生编号 0–199；不要把 000 改成 200。'],
-    ['频率', '单位 MHz，最多五位小数。发射频率空白表示接收专用。'], ['亚音', '留空 / 88.5 / D023N / D023I'],
-    ['名称', 'GBK 编码最多 16 字节，通常为 8 个汉字；不支持表情符号。'],
+    ['频率', '单位 MHz，最多五位小数。发射频率空白表示接收专用。'], ['亚音', '类型：关闭 / CTCSS / DCS。模拟亚音填写 Hz；数字亚音填写 D023N 或 D023I，N 正码、I 反码。'],
+    ['功率', '旧版 D500 仅支持高 / 低。'], ['信令码组', '1–15；具体码组内容沿用原始 DAT。'],
+    ['名称', 'V1 原厂保存逻辑最多 8 个 GBK 字节（常用汉字 4 个 / 英数字 8 个）。导入的原始长名称可保持原样；新增或更名按此限制。'],
     ['DAT', '导出 DAT 前需导入原厂软件导出的文件作为模板，保留其他机器设置。'],
     ['分组与备注', '只用于网页和表格，不写入电台 DAT。'], ['隐私', '文件在浏览器本地处理。'],
   ]);

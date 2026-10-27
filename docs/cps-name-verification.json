@@ -1,0 +1,113 @@
+[
+  {
+    "input": "一二三四",
+    "input_gbk_bytes": 8,
+    "saved": "一二三四",
+    "saved_bytes": [
+      210,
+      187,
+      182,
+      254,
+      200,
+      253,
+      203,
+      196
+    ],
+    "native_instructions": 1203
+  },
+  {
+    "input": "一二三四五",
+    "input_gbk_bytes": 10,
+    "saved": "一二三四",
+    "saved_bytes": [
+      210,
+      187,
+      182,
+      254,
+      200,
+      253,
+      203,
+      196
+    ],
+    "native_instructions": 1209
+  },
+  {
+    "input": "一二三四五六七八",
+    "input_gbk_bytes": 16,
+    "saved": "一二三四",
+    "saved_bytes": [
+      210,
+      187,
+      182,
+      254,
+      200,
+      253,
+      203,
+      196
+    ],
+    "native_instructions": 1209
+  },
+  {
+    "input": "ABCDEFGH",
+    "input_gbk_bytes": 8,
+    "saved": "ABCDEFGH",
+    "saved_bytes": [
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72
+    ],
+    "native_instructions": 1091
+  },
+  {
+    "input": "ABCDEFGHIJ",
+    "input_gbk_bytes": 10,
+    "saved": "ABCDEFGH",
+    "saved_bytes": [
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72
+    ],
+    "native_instructions": 1097
+  },
+  {
+    "input": "A一二三四",
+    "input_gbk_bytes": 9,
+    "saved": "A一二三",
+    "saved_bytes": [
+      65,
+      210,
+      187,
+      182,
+      254,
+      200,
+      253
+    ],
+    "native_instructions": 1300
+  },
+  {
+    "input": "测试名称五",
+    "input_gbk_bytes": 10,
+    "saved": "测试名称",
+    "saved_bytes": [
+      178,
+      226,
+      202,
+      212,
+      195,
+      251,
+      179,
+      198
+    ],
+    "native_instructions": 1209
+  }
+]

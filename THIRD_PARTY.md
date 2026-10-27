@@ -2,7 +2,7 @@
 
 ## K1toD500
 
-The D500 DAT layout, channel field encoding, DCS table, GBK name limits and K5Web channel mapping in `src/lib/dat.ts` and `src/lib/workbook.ts` are based on:
+The initial D500 DAT layout, channel field encoding, DCS table, GBK name encoding and K5Web channel mapping in `src/lib/dat.ts` and `src/lib/workbook.ts` are based on:
 
 - Project: https://github.com/Liuli-Lumine/K1toD500
 - Author/project owner: Liuli-Lumine
@@ -11,9 +11,7 @@ The D500 DAT layout, channel field encoding, DCS table, GBK name limits and K5We
 
 This project modifies and ports the original C++ implementation to TypeScript, adds template-preserving exports, browser editing, workbook conversion, validation and deployment. It does not include an upstream V2 default radio configuration.
 
-## K5Web
-
-https://github.com/silenty4ng/k5web informed workflow and spreadsheet interoperability. No K5 firmware or device serial protocol is used in this D500 application.
+Version 0.2.0 adds independently traced V1 CPS field mappings and a read-only metadata/native-name-copy verification harness. The V1 power and name-edit limits differ from the initial upstream assumptions; the evidence and test boundaries are documented in docs/DAT_FORMAT.md. No proprietary CPS executable or disassembly is distributed.
 
 ## SheetJS Community Edition
 

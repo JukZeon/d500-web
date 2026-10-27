@@ -3,11 +3,12 @@
  * This implementation preserves the imported template and untouched bytes.
  */
 import { decodeName, encodeName } from './encoding';
-import { type Channel, type DatTemplate, type Issue, type Power, newChannel, slotLabel } from './model';
+import { type Channel, type DatTemplate, type Issue, type Power, type RadioSettings, newChannel, slotLabel } from './model';
+import { readSettings, settingsChanges, writeSettings } from './settings';
 
 export const DCS_CODES = '023 025 026 031 032 036 043 047 051 053 054 065 071 072 073 074 114 115 116 122 125 131 132 134 143 145 152 155 156 162 165 172 174 205 212 223 225 226 243 244 245 246 251 252 255 261 263 265 266 271 274 306 311 315 325 331 332 343 346 351 356 364 365 371 411 412 413 423 431 432 445 446 452 454 455 462 464 465 466 503 506 516 523 526 532 546 565 606 612 624 627 631 632 645 654 662 664 703 712 723 731 732 734 743 754'.split(' ');
 export const CTCSS = '67.0 69.3 71.9 74.4 77.0 79.7 82.5 85.4 88.5 91.5 94.8 97.4 100.0 103.5 107.2 110.9 114.8 118.8 123.0 127.3 131.8 136.5 141.3 146.2 151.4 156.7 159.8 162.2 165.5 167.9 171.3 173.8 177.3 179.9 183.5 186.2 189.9 192.8 196.6 199.5 203.5 206.5 210.7 218.1 225.7 229.1 233.6 241.8 250.3 254.1'.split(' ');
-const sameRadioFields = (a: Channel, b: Channel) => ['name', 'rx', 'tx', 'rxTone', 'txTone', 'power', 'bandwidth', 'busy'].every(k => a[k as keyof Channel] === b[k as keyof Channel]);
+const sameRadioFields = (a: Channel, b: Channel) => ['name', 'rx', 'tx', 'rxTone', 'txTone', 'power', 'bandwidth', 'busy', 'scanAdd', 'pttId', 'signalCode', 'optionalSignal', 'muteMode', 'scramble'].every(k => a[k as keyof Channel] === b[k as keyof Channel]);
 export function parseRows(text: string): number[][] {
   if (text.length > 2_000_000) throw new Error('DAT 文件超过 2 MB，请确认选择的是 D500 写频文件。');
   const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/).filter(l => l.trim());
@@ -54,7 +55,7 @@ export function decodeTone(value: number): string {
   if (value < 600 || value > 2600) return `RAW:${value}`;
   return (value / 10).toFixed(1);
 }
-export function parseDat(text: string, fileName = 'D500.dat'): { channels: Channel[]; template: DatTemplate; warnings: string[] } {
+export function parseDat(text: string, fileName = 'D500.dat'): { channels: Channel[]; template: DatTemplate; settings: RadioSettings; warnings: string[] } {
   const rows = parseRows(text);
   const channels: Channel[] = [];
   const warnings: string[] = [];
@@ -68,44 +69,53 @@ export function parseDat(text: string, fileName = 'D500.dat'): { channels: Chann
       let name = '';
       try { name = decodeName(rows[256 + slot].slice(3)); }
       catch { warnings.push(`信道 ${slotLabel(slot)} 名称不能按 GBK 解码；未编辑时保留原始名称字节。`); }
-      const power: Power = (['high', 'mid', 'low'] as const)[p[14]] ?? `raw:${p[14]}`;
-      channels.push({ ...newChannel(slot), sourceSlot: slot, name, rx, tx, rxTone: decodeTone(p[8] | p[9] << 8), txTone: decodeTone(p[10] | p[11] << 8), power, bandwidth: p[15] & 64 ? 'narrow' : 'wide', busy: !!(p[15] & 8) });
+      const power: Power = (['high', 'low'] as const)[p[14] & 3] ?? `raw:${p[14] & 3}`;
+      channels.push({ ...newChannel(slot), sourceSlot: slot, name, rx, tx, rxTone: decodeTone(p[8] | p[9] << 8), txTone: decodeTone(p[10] | p[11] << 8), power, bandwidth: p[15] & 64 ? 'narrow' : 'wide', busy: !!(p[15] & 8), scanAdd: !!(p[15] & 4), pttId: p[15] & 3, signalCode: p[12] & 15, optionalSignal: p[13] & 15, muteMode: p[13] >> 4, scramble: !!(p[14] & 16) });
     } catch (e) {
       // Do not silently drop a record and then clear it on export.
       throw new Error(`信道 ${slotLabel(slot)} 无法解析：${e instanceof Error ? e.message : String(e)}。已停止导入，原文件保持不变。`);
     }
   }
-  return { channels, template: { rows, original: text, originalChannels: structuredClone(channels), fileName }, warnings };
+  return { channels, template: { rows, original: text, originalChannels: structuredClone(channels), fileName }, settings: readSettings(rows), warnings };
 }
-export function validateChannels(channels: Channel[]): Issue[] {
+export function validateChannels(channels: Channel[], originalChannels?: Channel[]): Issue[] {
   const issues: Issue[] = [];
+  const originals = new Map((originalChannels ?? []).map(c => [c.slot, c]));
   const slots = new Set<number>();
   for (const c of channels) {
     const add = (field: string, message: string, severity: 'error' | 'warning' = 'error') => issues.push({ slot: c.slot, field, message, severity });
     if (!Number.isInteger(c.slot) || c.slot < 0 || c.slot > 199) add('slot', '信道编号必须在 000–199 之间');
     if (slots.has(c.slot)) add('slot', '信道编号重复');
     slots.add(c.slot);
-    try { encodeName(c.name); } catch (e) { add('name', (e as Error).message); }
+    try {
+      const length = encodeName(c.name).length;
+      const before = originals.get(c.sourceSlot ?? c.slot);
+      if (length > 8 && before?.name !== c.name) add('name', `名称占 ${length} 字节；已验证的 V1 原厂保存逻辑最多支持 8 字节（常用汉字 4 个），请缩短后导出 DAT`, originalChannels ? 'error' : 'warning');
+    } catch (e) { add('name', (e as Error).message); }
     for (const f of ['rx', 'tx'] as const) {
       if (f === 'tx' && c.tx === '') continue;
       try { encodeFrequency(c[f]); } catch (e) { add(f, (e as Error).message); }
     }
     for (const f of ['rxTone', 'txTone'] as const) try { encodeTone(c[f]); } catch (e) { add(f, (e as Error).message); }
-    if (!['high', 'mid', 'low'].includes(c.power) && (!/^raw:\d{1,3}$/.test(c.power) || Number(c.power.slice(4)) > 255)) add('power', '功率值无效');
+    if (!['high', 'low'].includes(c.power) && (!/^raw:[0-3]$/.test(c.power))) add('power', '旧版 D500 仅支持高、低两档功率');
+    for (const field of ['pttId', 'signalCode', 'optionalSignal', 'muteMode'] as const) if (!Number.isInteger(c[field]) || c[field] < 0 || c[field] > (field === 'pttId' ? 3 : 15)) add(field, '信令参数无效');
+    for (const field of ['busy', 'scanAdd', 'scramble'] as const) if (typeof c[field] !== 'boolean') add(field, '开关参数无效');
     if (c.sourceSlot !== undefined && (!Number.isInteger(c.sourceSlot) || c.sourceSlot < 0 || c.sourceSlot > 199)) add('slot', '原始信道地址无效');
     if (c.bandwidth !== 'wide' && c.bandwidth !== 'narrow') add('bandwidth', '带宽值无效');
   }
   return issues;
 }
-export function exportDat(channels: Channel[], template: DatTemplate | null): string {
+export function exportDat(channels: Channel[], template: DatTemplate | null, settings?: RadioSettings): string {
   if (!template) throw new Error('请先导入本机原厂软件导出的 DAT，作为导出模板。这样可以保留旧版机器的其他设置。');
-  const issues = validateChannels(channels).filter(i => i.severity === 'error');
+  const parsed = parseDat(template.original);
+  const issues = validateChannels(channels, parsed.channels).filter(i => i.severity === 'error');
   if (issues.length) throw new Error(`信道 ${slotLabel(issues[0].slot)}：${issues[0].message}`);
   // Revalidate saved project metadata before trusting the stored template.
   const rows = parseRows(template.original);
-  const original = new Map(parseDat(template.original).channels.map(c => [c.slot, c]));
+  const original = new Map(parsed.channels.map(c => [c.slot, c]));
   const current = new Map(channels.map(c => [c.slot, c]));
-  if (current.size === original.size && channels.every(c => original.has(c.slot) && sameRadioFields(c, original.get(c.slot)!))) return template.original;
+  if (settings) writeSettings(rows, settings, parsed.settings);
+  if (!settingsChanges(settings, parsed.settings) && current.size === original.size && channels.every(c => (c.sourceSlot === undefined || c.sourceSlot === c.slot) && original.has(c.slot) && sameRadioFields(c, original.get(c.slot)!))) return template.original;
   for (let slot = 0; slot < 200; slot++) {
     const c = current.get(slot);
     const origin = c?.sourceSlot ?? slot;
@@ -114,17 +124,23 @@ export function exportDat(channels: Channel[], template: DatTemplate | null): st
       if (original.has(slot)) { rows[slot].fill(255, 3); rows[256 + slot].fill(255, 3); }
       continue;
     }
-    const p = before ? template.rows[origin].slice(3) : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 68];
+    const p = before ? parsed.template.rows[origin].slice(3) : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 68];
     if (!before || c.rx !== before.rx) p.splice(0, 4, ...encodeFrequency(c.rx));
     if (!before || c.tx !== before.tx) p.splice(4, 4, ...(c.tx ? encodeFrequency(c.tx) : [255, 255, 255, 255]));
     for (const [field, offset] of [['rxTone', 8], ['txTone', 10]] as const) if (!before || c[field] !== before[field]) {
       const v = encodeTone(c[field]); p[offset] = v & 255; p[offset + 1] = v >> 8;
     }
-    if (!before || c.power !== before.power) p[14] = c.power.startsWith('raw:') ? Number(c.power.slice(4)) : ['high', 'mid', 'low'].indexOf(c.power);
+    if (!before || c.power !== before.power) p[14] = p[14] & ~3 | (c.power.startsWith('raw:') ? Number(c.power.slice(4)) : ['high', 'low'].indexOf(c.power));
     if (!before || c.bandwidth !== before.bandwidth) p[15] = p[15] & ~64 | (c.bandwidth === 'narrow' ? 64 : 0);
     if (!before || c.busy !== before.busy) p[15] = p[15] & ~8 | (c.busy ? 8 : 0);
+    if (!before || c.scanAdd !== before.scanAdd) p[15] = p[15] & ~4 | (c.scanAdd ? 4 : 0);
+    if (!before || c.pttId !== before.pttId) p[15] = p[15] & ~3 | c.pttId;
+    if (!before || c.signalCode !== before.signalCode) p[12] = p[12] & ~15 | c.signalCode;
+    if (!before || c.optionalSignal !== before.optionalSignal) p[13] = p[13] & ~15 | c.optionalSignal;
+    if (!before || c.muteMode !== before.muteMode) p[13] = p[13] & 15 | c.muteMode << 4;
+    if (!before || c.scramble !== before.scramble) p[14] = p[14] & ~16 | (c.scramble ? 16 : 0);
     rows[slot].splice(3, 16, ...p);
-    if (before && origin !== slot && c.name === before.name) rows[256 + slot].splice(3, 16, ...template.rows[256 + origin].slice(3));
+    if (before && origin !== slot && c.name === before.name) rows[256 + slot].splice(3, 16, ...parsed.template.rows[256 + origin].slice(3));
     if (!before || c.name !== before.name) {
       const bytes = encodeName(c.name); rows[256 + slot].splice(3, 16, ...Array.from({ length: 16 }, (_, i) => bytes[i] ?? 255));
     }
