@@ -1,10 +1,11 @@
-/** Minimal Web Serial surface; no automatic port selection or signal toggling. */
+/** Web Serial transport using the observed CPS line settings and byte pacing. */
 export interface SerialPortLike {
   readable: ReadableStream<Uint8Array> | null;
   writable: WritableStream<Uint8Array> | null;
   open(options: { baudRate: number; dataBits: 8; stopBits: 1; parity: 'none'; flowControl: 'none' }): Promise<void>;
   close(): Promise<void>;
   getInfo(): { usbVendorId?: number; usbProductId?: number };
+  setSignals?(signals: { dataTerminalReady: boolean; requestToSend: boolean; break: boolean }): Promise<void>;
 }
 export interface SerialApi { requestPort(): Promise<SerialPortLike> }
 export function serialApi(): SerialApi | undefined {
@@ -33,9 +34,12 @@ export class SerialLink implements RadioLink {
     this.reader = port.readable!.getReader(); this.writer = port.writable!.getWriter();
     this.pumping = this.pump();
   }
-  static async open(port: SerialPortLike, trace: (entry: TraceEntry) => void, timeout = 2500, disconnected?: (error: Error) => void) {
+  static async open(port: SerialPortLike, trace: (entry: TraceEntry) => void, timeout = 5000, disconnected?: (error: Error) => void) {
     await port.open({ baudRate: 9600, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none' });
     if (!port.readable || !port.writable) { await port.close(); throw new Error('写频线没有可用的数据通道。'); }
+    try { await port.setSignals?.({ dataTerminalReady: true, requestToSend: false, break: false }); }
+    catch (error) { await port.close(); throw error; }
+    trace({ at: new Date().toISOString(), direction: 'INFO', hex: '9600 8N1 · DTR=1 RTS=0 · 字节间隔 32 ms' });
     return new SerialLink(port, trace, timeout, disconnected);
   }
   private async pump() {
@@ -90,11 +94,11 @@ export class SerialLink implements RadioLink {
     this.sending = true;
     try {
       this.trace({ at: new Date().toISOString(), direction: 'TX', hex: hex(bytes) });
-      // The native CPS emits individual bytes. Timing is provisional until cable testing.
+      // Captured CPS sends individual bytes at approximately 16–48 ms intervals.
       for (const byte of bytes) {
         checkAbort(signal);
         await this.writer.write(Uint8Array.of(byte));
-        await new Promise(resolve => setTimeout(resolve, 1));
+        await new Promise(resolve => setTimeout(resolve, 32));
       }
     } finally { this.sending = false; }
   }
@@ -104,6 +108,7 @@ export class SerialLink implements RadioLink {
     try { await this.reader.cancel(); } catch { /* unplugged */ }
     await this.pumping;
     this.reader.releaseLock(); this.writer.releaseLock();
-    await this.port.close();
+    try { await this.port.setSignals?.({ dataTerminalReady: false, requestToSend: false, break: false }); }
+    finally { await this.port.close(); }
   }
 }

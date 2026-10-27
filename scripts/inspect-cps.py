@@ -3,7 +3,7 @@
 
 Usage: python inspect-cps.py /path/to/D500_vip_CPS.exe -o /tmp/cps-map.json
 Optional dependencies: pefile, capstone. Never executes or modifies the EXE.
-The structure offsets below are specific to the SHA-256 pinned V1 binary.
+Only the two SHA-256 pinned binaries are supported; no proprietary payload is exported.
 """
 import argparse
 import hashlib
@@ -14,13 +14,16 @@ from pathlib import Path
 import capstone
 import pefile
 
-EXPECTED_SHA256 = 'c2d7e2d42a78d949b03d7557b0785139a856485d20c0cb12e9ae43979a3c3559'
+REVISIONS = {
+    'c2d7e2d42a78d949b03d7557b0785139a856485d20c0cb12e9ae43979a3c3559': (0x423bb4, 'official-v1-2024'),
+    'dfc9f53d9994e54cd097d3bcd617b118bfdfd596ce94a34289c257ce73430ce3': (0x423750, 'captured-cps-2025'),
+}
 
 
 def inspect(path: Path) -> dict:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest != EXPECTED_SHA256:
-        raise ValueError('Unsupported CPS revision; expected the official V1 1.0.0.0 executable.')
+    if digest not in REVISIONS:
+        raise ValueError('Unsupported CPS revision; expected one of the two pinned CPS executables.')
     pe = pefile.PE(str(path))
     base = pe.OPTIONAL_HEADER.ImageBase
     image_end = base + pe.OPTIONAL_HEADER.SizeOfImage
@@ -38,7 +41,7 @@ def inspect(path: Path) -> dict:
         return read(address, 180).split(b'\0')[0].decode('ascii', 'replace')
 
     def jump(address):
-        if not base < address < base + 0x17b000:
+        if not base < address < image_end:
             return None
         for instruction in disassembler.disasm(read(address, 24), address):
             if instruction.mnemonic == 'jmp' and instruction.op_str.startswith('0x'):
@@ -47,7 +50,7 @@ def inspect(path: Path) -> dict:
 
     objects = []
     for index in range(29):
-        descriptor = 0x423bb4 + index * 0x30
+        descriptor = REVISIONS[digest][0] + index * 0x30
         name = string(uint(descriptor + 0x18))
         item = {'name': name, 'descriptor': hex(descriptor), 'controls': []}
         if uint(descriptor + 0x28) & 0x80:
@@ -68,7 +71,7 @@ def inspect(path: Path) -> dict:
                             handlers.append({'event_index': event, 'stub': hex(stub), 'native': hex(target)})
                 item['controls'].append({'name': string(uint(address + 0x20)), 'handlers': handlers})
         objects.append(item)
-    return {'sha256': digest, 'version': '1.0.0.0', 'format': 'PE32 / native VB6', 'objects': objects}
+    return {'sha256': digest, 'revision': REVISIONS[digest][1], 'format': 'PE32 / native VB6', 'objects': objects}
 
 
 if __name__ == '__main__':

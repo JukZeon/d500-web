@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseDat, exportDat, parseRows } from './dat';
 import { emptyWorkspace, newChannel } from './model';
-import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HELLO, planWrite, readCommand, snapshotDat, type RadioSnapshot } from './radio';
+import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HELLO, planWrite, programWorkspace, type WritePlan, readCommand, snapshotDat, type RadioSnapshot } from './radio';
 import { checkAbort, SerialLink, type RadioLink, type SerialPortLike } from './serial';
 
 function setup() {
@@ -17,7 +17,8 @@ class RadioSimulator implements RadioLink {
   sent: number[][] = [];
   identity = Array(49).fill(0);
   password = Array(16).fill(0x20);
-  wrongAddress = false; wrongAck = false; ignoreWrite = false;
+  pendingAck = false;
+  wrongAddress = false; wrongAck = false; ignoreWrite = false; identityAckPrefix = false;
   constructor(public memory: number[], private prefix = true) { this.identity[0] = 1; this.identity[48] = 0x55; }
   async write(bytes: Uint8Array, signal?: AbortSignal) {
     checkAbort(signal); this.sent.push([...bytes]);
@@ -25,18 +26,22 @@ class RadioSimulator implements RadioLink {
     else if (bytes[0] === 0x53) {
       const address = bytes[1] << 8 | bytes[2];
       const data = address === 0x3df0 ? this.password : this.memory.slice(address, address + bytes[3]);
-      this.queue.push(...(this.prefix ? [6] : []), 0x58, bytes[1], this.wrongAddress ? bytes[2] ^ 16 : bytes[2], bytes[3], ...data);
+      this.queue.push(...(address === 0x3df0 && this.identityAckPrefix ? [5] : []), 0x58, bytes[1], this.wrongAddress ? bytes[2] ^ 16 : bytes[2], bytes[3], ...data); this.pendingAck = true;
     } else if (bytes[0] === 0x58) {
       if (!this.ignoreWrite) this.memory.splice(bytes[1] << 8 | bytes[2], 16, ...bytes.slice(4));
       this.queue.push(this.wrongAck ? 0x15 : 6);
-    }
+    } else if (bytes[0] === 6 && this.pendingAck) { if (this.prefix) this.queue.push(6); this.pendingAck = false; }
   }
   async read(count: number, signal?: AbortSignal) { checkAbort(signal); if (this.queue.length < count) throw new Error('模拟响应不足'); return Uint8Array.from(this.queue.splice(0, count)); }
   writes() { return this.sent.filter(p => p[0] === 0x58); }
 }
 
-describe('experimental D500 protocol, simulator only', () => {
-  it('keeps production writes closed pending hardware evidence', () => { expect(HARDWARE_WRITE_VERIFIED).toBe(false); });
+async function candidate(io: RadioSimulator, workspace: ReturnType<typeof setup>['workspace'], plan: WritePlan, backup: (s: RadioSnapshot) => Promise<void>, progress: (done: number, total: number, label: string) => void) {
+  return programWorkspace(async () => { io.queue = []; io.pendingAck = false; return { write: io.write.bind(io), read: io.read.bind(io), async close() { io.queue = []; } }; }, workspace, plan, 'all', backup, progress);
+}
+
+describe('captured D500 protocol with synthetic device memory', () => {
+  it('accurately marks browser write hardware verification as pending', () => { expect(HARDWARE_WRITE_VERIFIED).toBe(false); });
   it('encodes bounded read commands and refuses unaligned or out-of-range addresses', () => {
     expect([...readCommand(0x3df0, 16)]).toEqual([0x53, 0x3d, 0xf0, 16]);
     expect(() => readCommand(1, 64)).toThrow(); expect(() => readCommand(0x4000, 64)).toThrow();
@@ -56,6 +61,25 @@ describe('experimental D500 protocol, simulator only', () => {
       await expect(new D500Protocol(io).readImage(() => {})).rejects.toThrow();
       expect(io.writes()).toHaveLength(0);
     }
+  });
+  it('handles the captured 2025 handshake, identity-ACK response and exact unprotected status', async () => {
+    const { snapshot } = setup(), io = new RadioSimulator([...snapshot.bytes]);
+    io.password = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 16]; io.identityAckPrefix = true;
+    const result = await new D500Protocol(io).readImage(() => {});
+    expect(io.sent[0]).toEqual([0x55, 0x20, 0x25, 7, 6, 255, 220, 2]);
+    expect(result.communicationProfile).toBe('cps-2025'); expect(result.bytes).toEqual(snapshot.bytes);
+    const unknown = new RadioSimulator([...snapshot.bytes]); unknown.password = [...io.password]; unknown.password[14] = 1;
+    await expect(new D500Protocol(unknown).readImage(() => {})).rejects.toThrow('未知密码格式');
+    expect(unknown.writes()).toHaveLength(0);
+  });
+  it('does not accept arbitrary ACK prefixes on configuration blocks', async () => {
+    const { snapshot } = setup();
+    const invalid = new RadioSimulator([...snapshot.bytes]); invalid.queue.push(5);
+    await expect(new D500Protocol(invalid).readBlock(0, 64)).rejects.toThrow('未知帧');
+  });
+  it('reports the failing handshake stage', async () => {
+    const link: RadioLink = { async write() {}, async read() { throw new Error('响应超时'); } };
+    await expect(new D500Protocol(link).identify()).rejects.toThrow('握手失败');
   });
   it('cancellation sends no further packets', async () => {
     const { snapshot } = setup(), io = new RadioSimulator([...snapshot.bytes]), abort = new AbortController(); abort.abort();
@@ -101,33 +125,49 @@ describe('experimental D500 protocol, simulator only', () => {
   it('candidate writes require fresh preflight, backup, ACK, and exact readback', async () => {
     const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000';
     const plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]); let backedUp = false;
-    await new D500Protocol(io).writeCandidate(plan, async fresh => {
-      expect(io.writes()).toHaveLength(0); expect(fresh.bytes).toEqual(snapshot.bytes); backedUp = true;
+    await candidate(io, workspace, plan, async fresh => {
+      if (!backedUp) { expect(io.writes()).toHaveLength(0); expect(fresh.bytes).toEqual(snapshot.bytes); } backedUp = true;
     }, () => {});
     expect(backedUp).toBe(true); expect(io.writes()).toHaveLength(1);
     expect(io.memory.slice(0, 16)).toEqual(plan.blocks[0].after);
   });
+  it('uses three independent sessions and the captured host ACK between write frames', async () => {
+    const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000'; workspace.channels.push(newChannel(1));
+    const plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]);
+    await candidate(io, workspace, plan, async () => {}, () => {});
+    expect(io.sent.filter(p => p[0] === HELLO[0])).toHaveLength(3);
+    const first = io.sent.findIndex(p => p[0] === 0x58), second = io.sent.findIndex((p, i) => i > first && p[0] === 0x58);
+    expect(io.sent[first - 1]).toEqual([6]);
+    expect(io.sent.slice(first, second + 1)).toEqual([[0x58, 0, 0, 16, ...plan.blocks[0].after], [6], [0x58, 0, 16, 16, ...plan.blocks[1].after]]);
+  });
+  it('cancels between complete write blocks and never retries or claims verification', async () => {
+    const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000'; workspace.channels.push(newChannel(1));
+    const plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]), controller = new AbortController(); let sessions = 0;
+    const open = async () => { sessions++; io.queue = []; io.pendingAck = false; return { write: io.write.bind(io), read: io.read.bind(io), async close() { io.queue = []; } }; };
+    await expect(programWorkspace(open, workspace, plan, 'all', async () => {}, (done, total, label) => { if (label.startsWith('写入 ')) controller.abort(); }, controller.signal)).rejects.toThrow('重新读取');
+    expect(io.writes()).toHaveLength(1); expect(sessions).toBe(2);
+  });
   it('sends no write when a fresh preflight conflicts or the backup fails', async () => {
     const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000'; const plan = planWrite(snapshot, workspace);
     const changed = new RadioSimulator([...snapshot.bytes]); changed.memory[0] ^= 1;
-    await expect(new D500Protocol(changed).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow('已变化');
+    await expect(candidate(changed, workspace, plan, async () => {}, () => {})).rejects.toThrow('冲突');
     expect(changed.writes()).toHaveLength(0);
     const io = new RadioSimulator([...snapshot.bytes]);
-    await expect(new D500Protocol(io).writeCandidate(plan, async () => { throw new Error('磁盘满'); }, () => {})).rejects.toThrow('磁盘满');
+    await expect(candidate(io, workspace, plan, async () => { throw new Error('磁盘满'); }, () => {})).rejects.toThrow('磁盘满');
     expect(io.writes()).toHaveLength(0);
   });
   it('stops without retrying when a write ACK or readback fails', async () => {
     const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000'; workspace.channels.push(newChannel(1)); const plan = planWrite(snapshot, workspace);
     for (const mode of ['wrongAck', 'ignoreWrite'] as const) {
       const io = new RadioSimulator([...snapshot.bytes]); io[mode] = true;
-      await expect(new D500Protocol(io).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow();
-      expect(io.writes()).toHaveLength(1);
+      await expect(candidate(io, workspace, plan, async () => {}, () => {})).rejects.toThrow();
+      expect(io.writes()).toHaveLength(mode === 'wrongAck' ? 1 : plan.blocks.length);
     }
   });
   it('rejects forged write plans outside the allowlist before communicating', async () => {
     const { snapshot, workspace } = setup(), plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]);
     plan.blocks.push({ address: 0x3df0, before: Array(16).fill(32), after: Array(16).fill(0) });
-    await expect(new D500Protocol(io).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow('未确认');
+    await expect(candidate(io, workspace, plan, async () => {}, () => {})).rejects.toThrow('未确认');
     expect(io.sent).toHaveLength(0);
   });
   it('rejects forged reserved bits, unknown setting bytes, and duplicate blocks', async () => {
@@ -136,12 +176,12 @@ describe('experimental D500 protocol, simulator only', () => {
       const plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]);
       const before = snapshot.bytes.slice(row * 16, row * 16 + 16), after = [...before]; after[row === 0 ? 14 : 1] ^= row === 0 ? 0x80 : 1;
       plan.blocks.push({ address: row * 16, before, after });
-      await expect(new D500Protocol(io).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow('未确认');
+      await expect(candidate(io, workspace, plan, async () => {}, () => {})).rejects.toThrow('未确认');
       expect(io.sent).toHaveLength(0);
     }
     workspace.channels[0].rx = '439.55000'; const plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]);
     plan.blocks.push(plan.blocks[0]);
-    await expect(new D500Protocol(io).writeCandidate(plan, async () => {}, () => {})).rejects.toThrow('未确认');
+    await expect(candidate(io, workspace, plan, async () => {}, () => {})).rejects.toThrow('未确认');
     expect(io.sent).toHaveLength(0);
   });
 });
@@ -177,5 +217,13 @@ describe('Web Serial transport', () => {
     const first = link.read(1); await expect(link.read(1)).rejects.toThrow('同时'); input.enqueue(Uint8Array.of(6)); await first;
     const controller = new AbortController(); controller.abort(); await expect(link.write(Uint8Array.of(9), controller.signal)).rejects.toThrow();
     expect(output).toHaveLength(4); await link.close();
+  });
+  it('sets the captured DTR/RTS state and reports the transport parameters', async () => {
+    const { device } = port(); const signals: unknown[] = [], messages: string[] = [];
+    device.setSignals = async value => { signals.push(value); };
+    const link = await SerialLink.open(device, entry => { messages.push(entry.hex); });
+    expect(signals).toEqual([{ dataTerminalReady: true, requestToSend: false, break: false }]);
+    expect(messages[0]).toContain('32 ms'); await link.close();
+    expect(signals.at(-1)).toEqual({ dataTerminalReady: false, requestToSend: false, break: false });
   });
 });

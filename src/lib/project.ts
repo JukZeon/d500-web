@@ -1,6 +1,6 @@
 import { type Channel, type Workspace, type Power, newChannel } from './model';
 import { parseDat } from './dat';
-import { MENU_SETTINGS, VFO_SETTINGS, validateSettings } from './settings';
+import { MENU_SETTINGS, VFO_SETTINGS, VFO_NUMERIC, completeSettings, validateSettings } from './settings';
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 export function parseProject(text: string): Workspace {
   if (text.length > 4_000_000) throw new Error('方案文件过大。');
@@ -16,10 +16,11 @@ export function parseProject(text: string): Workspace {
     if (data.settings !== undefined) {
       if (!obj(data.settings) || !obj(data.settings.menu) || !Array.isArray(data.settings.vfo) || data.settings.vfo.length !== 4) throw new Error('方案中的电台设置无效。');
       const menu = data.settings.menu, vfo = data.settings.vfo;
-      const restored = {
-        menu: Object.fromEntries(MENU_SETTINGS.map(d => [d.key, Number(menu[d.key])])),
-        vfo: vfo.map(v => { if (!obj(v)) throw new Error('方案中的频率模式设置无效。'); return Object.fromEntries(VFO_SETTINGS.map(d => [d.key, Number(v[d.key])])); }),
-      };
+      const restored = completeSettings({
+        menu: Object.fromEntries(MENU_SETTINGS.map(d => [d.key, menu[d.key] === undefined ? settings!.menu[d.key] : Number(menu[d.key])])),
+        vfo: vfo.map((v, b) => { if (!obj(v)) throw new Error('方案中的频率模式设置无效。'); return Object.fromEntries([...VFO_SETTINGS.map(d => d.key), ...VFO_NUMERIC].map(key => [key, v[key] === undefined ? settings!.vfo[b][key] : Number(v[key])])); }),
+        text: obj(data.settings.text) && typeof data.settings.text.boot === 'string' ? { boot: data.settings.text.boot } : settings.text,
+      }, settings);
       if (validateSettings(restored, settings).length) throw new Error('方案中的电台设置超出允许范围。');
       settings = restored;
     }

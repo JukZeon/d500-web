@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CTCSS, DCS_CODES } from '../lib/dat';
+import { CTCSS, DCS_CODES, encodeTone } from '../lib/tone';
 
 export function toneParts(value: string) {
   if (!value) return { mode: 'off', code: '', polarity: 'N' };
@@ -10,15 +10,18 @@ export function toneParts(value: string) {
 }
 export default function ToneEditor({ value, onChange, label, compact = false }: { value: string; onChange: (value: string) => void; label: string; compact?: boolean }) {
   const { mode, code, polarity } = toneParts(value);
-  const [manual, setManual] = useState(false);
+  const [manual, setManual] = useState(false), [error, setError] = useState('');
   const [draft, setDraft] = useState(code);
-  useEffect(() => { setDraft(code); }, [code]);
+  useEffect(() => { setDraft(code); setError(''); }, [code]);
   const options = mode === 'dcs' ? DCS_CODES : CTCSS;
   const custom = manual || !options.includes(code);
-  const setCode = (s: string) => onChange(mode === 'dcs' ? `D${s.replace(/^D/i, '').replace(/[NI]$/i, '')}${polarity}` : s);
+  const setCode = (s: string) => {
+    const next = mode === 'dcs' ? `D${s.replace(/^D/i, '').replace(/[NI]$/i, '')}${polarity}` : s;
+    try { encodeTone(next); setError(''); onChange(next); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
   return <div className={`tone-editor ${compact ? 'compact' : ''}`} role="group" aria-label={label}>
     <select aria-label={`${label}类型`} value={mode} onChange={e => {
-      setManual(false);
+      setManual(false); setError('');
       onChange(e.target.value === 'off' ? '' : e.target.value === 'dcs' ? 'D023N' : '88.5');
     }}>
       <option value="off">关闭</option><option value="ctcss">{compact ? 'CTCSS' : '模拟 CTCSS'}</option><option value="dcs">{compact ? 'DCS' : '数字 DCS'}</option>{mode === 'raw' && <option value="raw">原始值</option>}
@@ -37,6 +40,7 @@ export default function ToneEditor({ value, onChange, label, compact = false }: 
       }} />}
       {mode === 'dcs' && <select className="tone-polarity" aria-label={`${label}极性`} value={polarity} onChange={e => onChange(`D${code}${e.target.value}`)}><option value="N">{compact ? 'N' : '正码 N'}</option><option value="I">{compact ? 'I' : '反码 I'}</option></select>}
     </>}
+    {error && <span className="tone-error" role="alert">{error}</span>}
     {mode === 'raw' && <span className="raw-tone mono" title="未识别的原始码值，保持原样；可切换类型重新设置">{value}</span>}
   </div>;
 }

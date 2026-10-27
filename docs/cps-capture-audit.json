@@ -1,0 +1,216 @@
+{
+  "captureSha256": "6f878e7cadad4016d3374823f1179ba50688effa0534eccc6bc612dcbb049df5",
+  "baselineSha256": "a85e937fad07b696f9f36a20b9dd1f66f287b1ce48f46db114e3b88dbf068cfe",
+  "captureSessions": 13,
+  "sessions": [
+    {
+      "startUtc": "2026-10-27T14:56:29.360Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 8,
+      "writeBlocks": 0,
+      "readBytes": 512,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        3584,
+        4095
+      ],
+      "writeAddressBounds": null
+    },
+    {
+      "startUtc": "2026-10-27T15:07:47.082Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 1,
+      "writeBlocks": 0,
+      "readBytes": 64,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        3584,
+        3647
+      ],
+      "writeAddressBounds": null
+    },
+    {
+      "startUtc": "2026-10-27T15:07:56.050Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 1,
+      "writeBlocks": 0,
+      "readBytes": 64,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        3584,
+        3647
+      ],
+      "writeAddressBounds": null
+    },
+    {
+      "startUtc": "2026-10-27T15:08:04.983Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 1,
+      "writeBlocks": 0,
+      "readBytes": 64,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        3584,
+        3647
+      ],
+      "writeAddressBounds": null
+    },
+    {
+      "startUtc": "2026-10-27T15:08:13.773Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 8,
+      "writeBlocks": 0,
+      "readBytes": 512,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        3584,
+        4095
+      ],
+      "writeAddressBounds": null
+    },
+    {
+      "startUtc": "2026-10-27T15:08:42.800Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 0,
+      "writeBlocks": 2,
+      "readBytes": 0,
+      "writeBytes": 32,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": false,
+      "readAddressBounds": null,
+      "writeAddressBounds": [
+        3584,
+        3615
+      ]
+    },
+    {
+      "startUtc": "2026-10-27T15:08:50.722Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 0,
+      "writeBlocks": 2,
+      "readBytes": 0,
+      "writeBytes": 32,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": false,
+      "readAddressBounds": null,
+      "writeAddressBounds": [
+        3584,
+        3615
+      ]
+    },
+    {
+      "startUtc": "2026-10-27T15:08:58.645Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 0,
+      "writeBlocks": 32,
+      "readBytes": 0,
+      "writeBytes": 512,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": true,
+      "readAddressBounds": null,
+      "writeAddressBounds": [
+        3584,
+        4095
+      ]
+    },
+    {
+      "startUtc": "2026-10-27T15:09:42.138Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 8,
+      "writeBlocks": 0,
+      "readBytes": 512,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        3584,
+        4095
+      ],
+      "writeAddressBounds": null
+    },
+    {
+      "startUtc": "2026-10-27T15:10:34.461Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 102,
+      "writeBlocks": 0,
+      "readBytes": 6528,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        0,
+        7359
+      ],
+      "writeAddressBounds": null
+    },
+    {
+      "startUtc": "2026-10-27T15:13:16.637Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 0,
+      "writeBlocks": 402,
+      "readBytes": 0,
+      "writeBytes": 6432,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": true,
+      "readAddressBounds": null,
+      "writeAddressBounds": [
+        0,
+        7311
+      ]
+    },
+    {
+      "startUtc": "2026-10-27T15:19:59.555Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 1,
+      "writeBlocks": 0,
+      "readBytes": 64,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        10496,
+        10559
+      ],
+      "writeAddressBounds": null
+    },
+    {
+      "startUtc": "2026-10-27T15:20:08.015Z",
+      "closed": true,
+      "handshakeMatches": true,
+      "readBlocks": 8,
+      "writeBlocks": 0,
+      "readBytes": 512,
+      "writeBytes": 0,
+      "allPayloadsMatchMacRead": true,
+      "allWritesAcknowledged": null,
+      "readAddressBounds": [
+        10496,
+        11007
+      ],
+      "writeAddressBounds": null
+    }
+  ],
+  "scope": "One old D500 without aviation reception; factory writes preserved the existing values."
+}

@@ -36,6 +36,7 @@ export interface Workspace {
 export interface RadioSettings {
   menu: Record<string, number>;
   vfo: Record<string, number>[];
+  text?: Record<string, string>;
 }
 export interface Issue { slot: number; field: string; message: string; severity: 'error' | 'warning' }
 export const MAX_CHANNELS = 200;

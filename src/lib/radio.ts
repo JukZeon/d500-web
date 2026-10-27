@@ -1,29 +1,29 @@
-/** Experimental D500 V1 protocol reconstructed from the pinned native CPS.
- * See docs/SERIAL_PROTOCOL.md. Mock tests are not hardware validation.
+/** D500 configuration protocol, checked against CPS capture and a real radio read.
+ * See docs/SERIAL_PROTOCOL.md for the evidence and remaining write limitations.
  */
-import { exportDat, parseRows } from './dat';
-import type { Workspace } from './model';
-import { MENU_SETTINGS, VFO_SETTINGS } from './settings';
+import { exportDat, parseDat, parseRows } from './dat';
+import { type Workspace, type Channel, POWER_LABEL, PTT_OPTIONS, SIGNAL_OPTIONS, MUTE_OPTIONS, slotLabel } from './model';
+import { decodeTone } from './tone';
+import { settingsFields, MENU_SETTINGS, VFO_SETTINGS } from './settings';
 import { checkAbort, hex, type RadioLink } from './serial';
 
 export const HARDWARE_WRITE_VERIFIED = false;
 export const CONFIG_SIZE = 0x3200;
-export const HELLO = Uint8Array.of(0x55, 0x20, 0x21, 0x01, 0x23, 0xff, 0xdc, 0x02);
+export const HELLO = Uint8Array.of(0x55, 0x20, 0x25, 0x07, 0x06, 0xff, 0xdc, 0x02);
 export interface RadioSnapshot {
   schema: 'd500-radio-read-v1';
   capturedAt: string;
   identity: number[];
   bytes: number[];
   hardwareVerified: false;
+  communicationProfile?: 'cps-2025';
 }
 export type Progress = (done: number, total: number, label: string) => void;
 export interface WriteBlock { address: number; before: number[]; after: number[] }
 export interface WritePlan { blocks: WriteBlock[]; channels: number[]; names: number[]; settings: number; changedBytes: number }
 const addressText = (address: number) => `0x${address.toString(16).padStart(4, '0').toUpperCase()}`;
 function editableByte(row: number, byte: number) {
-  return row >= 0 && row < 200 || row >= 256 && row < 456 ||
-    MENU_SETTINGS.some(d => row === 224 + Math.floor(Number(d.key) / 16) && byte === Number(d.key) % 16) ||
-    [241, 243, 245, 247].includes(row) && VFO_SETTINGS.some(d => d.byte === byte);
+  return row >= 0 && row < 200 || row >= 256 && row < 456 || settingsFields(row).some(field => field.includes(byte));
 }
 const CHANNEL_MASKS = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 15, 255, 0x13, 0x4f];
 function editableMask(row: number, byte: number, old: number[], next: number[]) {
@@ -37,7 +37,7 @@ function fields(row: number, old: number[], next: number[]): Field[] {
   if (row >= 256 && row < 456 || row < 200 && (old.every(v => v === 255) || next.every(v => v === 255))) return [span(0, 16)];
   if (row < 200) return [span(0, 4), span(4, 4), span(8, 2), span(10, 2),
     ...[[12, 15], [13, 15], [13, 240], [14, 3], [14, 16], [15, 3], [15, 4], [15, 8], [15, 64]].map(([byte, mask]) => ({ bytes: [byte], mask }))];
-  return Array.from({ length: 16 }, (_, i) => span(i, 1)).filter(field => editableByte(row, field.bytes[0]));
+  return settingsFields(row).map(bytes => ({ bytes, mask: 255 }));
 }
 
 export function readCommand(address: number, length: 16 | 64) {
@@ -88,7 +88,12 @@ export class D500Protocol {
   constructor(private link: RadioLink) {}
   async identify(signal?: AbortSignal): Promise<Uint8Array> {
     await this.link.write(HELLO, signal);
-    const first = (await this.link.read(1, signal))[0];
+    let first: number;
+    try { first = (await this.link.read(1, signal))[0]; }
+    catch (error) {
+      checkAbort(signal);
+      throw new Error(`电台握手失败：${error instanceof Error ? error.message : String(error)} 请确认写频线未被原厂软件或云电脑占用。`);
+    }
     if (first !== 6 && first !== 1) throw new Error(`未识别的握手响应 ${hex(Uint8Array.of(first))}；已停止通信。`);
     const identity = first === 6 ? await this.link.read(49, signal) : Uint8Array.of(first, ...await this.link.read(48, signal));
     if (identity[48] !== 0x55) throw new Error('设备识别帧不符合旧版 CPS 格式，已停止。');
@@ -97,13 +102,19 @@ export class D500Protocol {
     if (digits.some(i => identity[i] > 9)) throw new Error('设备频段识别数据异常，已停止。');
     await this.link.write(Uint8Array.of(6), signal);
     const password = await this.readBlock(0x3df0, 16, signal);
-    if (!password.slice(0, 6).every(v => v === 0x20)) throw new Error('设备可能设置了读写密码；请使用原厂软件处理后再试。');
+    // The 2025 CPS reads this exact status without prompting for a password.
+    // Accept only the observed zero-password status, not arbitrary zero-prefixed data.
+    const observedUnprotected = password.every((v, i) => v === (i === 12 ? 1 : i === 15 ? 16 : 0));
+    if (!password.slice(0, 6).every(v => v === 0x20) && !observedUnprotected) throw new Error('设备可能设置了读写密码或使用未知密码格式；请使用原厂软件处理后再试。');
     return identity;
   }
   async readBlock(address: number, length: 16 | 64, signal?: AbortSignal): Promise<Uint8Array> {
     await this.link.write(readCommand(address, length), signal);
     let marker = (await this.link.read(1, signal))[0];
-    // Native CPS searches for X near the frame start; accept a single ACK prefix only.
+    // On the tested Mac cable, 05 follows the identity ACK. The CPS purges it;
+    // consume it only at this exact boundary, without discarding unknown frames.
+    if (marker === 5 && address === 0x3df0) marker = (await this.link.read(1, signal))[0];
+    // A single ACK before each data response is present in the real capture.
     if (marker === 6) marker = (await this.link.read(1, signal))[0];
     if (marker !== 0x58) throw new Error(`${addressText(address)} 返回了未知帧 ${hex(Uint8Array.of(marker))}，已停止。`);
     const header = await this.link.read(3, signal);
@@ -117,36 +128,112 @@ export class D500Protocol {
     const identity = await this.identify(signal), bytes = new Uint8Array(CONFIG_SIZE);
     for (let address = 0; address < CONFIG_SIZE; address += 64) {
       checkAbort(signal);
-      bytes.set(await this.readBlock(address, 64, signal), address);
+      try { bytes.set(await this.readBlock(address, 64, signal), address); }
+      catch (error) { checkAbort(signal); throw new Error(`读取配置 ${addressText(address)} 失败：${error instanceof Error ? error.message : String(error)}`); }
       progress(address + 64, CONFIG_SIZE, `读取配置 ${addressText(address)}`);
     }
-    return { schema: 'd500-radio-read-v1', capturedAt: new Date().toISOString(), identity: [...identity], bytes: [...bytes], hardwareVerified: false };
+    return { schema: 'd500-radio-read-v1', capturedAt: new Date().toISOString(), identity: [...identity], bytes: [...bytes], hardwareVerified: false, communicationProfile: 'cps-2025' };
   }
-  /** Internal candidate only. Production UI never invokes X until hardware validation.
-   * Fresh preflight + durable backup must succeed before the first write command.
-   * No retry after an uncertain ACK; a partial write requires a new read.
-   */
-  async writeCandidate(plan: WritePlan, backup: (snapshot: RadioSnapshot) => Promise<void>, progress: Progress, signal?: AbortSignal) {
-    const addresses = new Set<number>();
-    for (const block of plan.blocks) {
-      const row = block.address / 16;
-      if (!Number.isInteger(row) || row < 0 || block.address >= CONFIG_SIZE || addresses.has(block.address) || block.before.length !== 16 || block.after.length !== 16 ||
-        [...block.before, ...block.after].some(v => !Number.isInteger(v) || v < 0 || v > 255) ||
-        !Array.from({ length: 16 }, (_, i) => i).some(i => editableByte(row, i)) ||
-        block.after.some((v, i) => ((v ^ block.before[i]) & ~editableMask(row, i, block.before, block.after)) !== 0)) throw new Error('写入计划无效或包含未确认区域');
-      addresses.add(block.address);
-    }
-    const fresh = await this.readImage(progress, signal);
-    for (const block of plan.blocks) if (block.before.some((v, i) => v !== fresh.bytes[block.address + i])) throw new Error('电台内容已变化，已取消写入。请重新读取。');
-    await backup(fresh); checkAbort(signal);
+  /** A dedicated write session follows the factory capture: password ACK, X/ACK,
+   * then host ACK + X/ACK for each following block. Verification uses a new session. */
+  async writeBlocks(plan: WritePlan, identity: number[], progress: Progress, signal?: AbortSignal) {
+    validatePlan(plan);
+    const actualIdentity = await this.identify(signal);
+    if (identity.length !== actualIdentity.length || identity.some((v, i) => v !== actualIdentity[i])) throw new Error('设备识别信息已变化，已取消写入。');
+    if ((await this.link.read(1, signal))[0] !== 6) throw new Error('电台未确认写入会话，已停止。');
     for (const [index, block] of plan.blocks.entries()) {
       checkAbort(signal);
-      // Cancellation takes effect between blocks, not halfway through a write frame.
+      // A started frame completes atomically; cancellation acts between blocks.
+      if (index) await this.link.write(Uint8Array.of(6));
       await this.link.write(Uint8Array.of(0x58, block.address >> 8, block.address & 255, 16, ...block.after));
-      if ((await this.link.read(1))[0] !== 6) throw new Error(`写入 ${addressText(block.address)} 未获确认；停止后续写入，请重新读取检查。`);
-      const actual = await this.readBlock(block.address, 16);
-      if (block.after.some((v, i) => actual[i] !== v)) throw new Error(`${addressText(block.address)} 写后回读不一致；已停止，请重新读取检查。`);
-      progress(index + 1, plan.blocks.length, `已回读核对 ${addressText(block.address)}`);
+      if ((await this.link.read(1))[0] !== 6) throw new Error(`写入 ${addressText(block.address)} 未获确认；已停止，请重新读取检查。`);
+      progress(index + 1, plan.blocks.length, `写入 ${addressText(block.address)}`);
     }
   }
+}
+export function validatePlan(plan: WritePlan) {
+  const addresses = new Set<number>();
+  for (const block of plan.blocks) {
+    const row = block.address / 16;
+    if (!Number.isInteger(row) || row < 0 || block.address >= CONFIG_SIZE || addresses.has(block.address) || block.before.length !== 16 || block.after.length !== 16 ||
+      [...block.before, ...block.after].some(v => !Number.isInteger(v) || v < 0 || v > 255) ||
+      !Array.from({ length: 16 }, (_, i) => i).some(i => editableByte(row, i)) ||
+      block.after.some((v, i) => ((v ^ block.before[i]) & ~editableMask(row, i, block.before, block.after)) !== 0)) throw new Error('写入计划无效或包含未确认区域');
+    addresses.add(block.address);
+  }
+}
+export type WriteScope = 'all' | 'channels' | 'settings';
+export function scopePlan(plan: WritePlan, scope: WriteScope): WritePlan {
+  const blocks = plan.blocks.filter(b => scope === 'all' || (b.address < 3200 || b.address >= 4096) === (scope === 'channels'));
+  return { blocks, channels: plan.channels.filter(c => blocks.some(b => b.address === c * 16)), names: plan.names.filter(c => blocks.some(b => b.address === (256 + c) * 16)), settings: blocks.filter(b => b.address >= 3200 && b.address < 4096).length, changedBytes: blocks.reduce((n, b) => n + b.after.filter((v, i) => v !== b.before[i]).length, 0) };
+}
+export type SessionFactory = () => Promise<RadioLink & { close(): Promise<void> }>;
+/** Three separate port sessions match CPS operations and prevent queued read ACKs
+ * from being mistaken for write acknowledgements. Backup is durable before X. */
+export async function programWorkspace(open: SessionFactory, workspace: Workspace, reviewed: WritePlan, scope: WriteScope, backup: (snapshot: RadioSnapshot) => Promise<void>, progress: Progress, signal?: AbortSignal): Promise<RadioSnapshot> {
+  validatePlan(reviewed);
+  if (!reviewed.blocks.length) throw new Error('没有需要写入的修改。');
+  async function read(label: string) {
+    const link = await open();
+    try { return await new D500Protocol(link).readImage((done, total) => progress(done, total, label), signal); }
+    finally { await link.close(); }
+  }
+  const before = await read('写前读取与检查');
+  const fresh = scopePlan(planWrite(before, workspace), scope);
+  if (JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('电台内容已变化，写入预览已失效。请重新读取并检查修改。');
+  await backup(before); checkAbort(signal);
+  const link = await open(); let writingStarted = false;
+  try {
+    writingStarted = true;
+    await new D500Protocol(link).writeBlocks(fresh, before.identity, progress, signal);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${writingStarted ? ' 写入未完成；请重新读取电台核对，勿直接重复写入。' : ''}`);
+  } finally { await link.close(); }
+  let after: RadioSnapshot;
+  try { after = await read('写后回读核对'); }
+  catch (error) { throw new Error(`写入已发送，但回读未完成：${error instanceof Error ? error.message : String(error)} 请重新读取电台核对。`); }
+  const expected = [...before.bytes];
+  for (const block of fresh.blocks) expected.splice(block.address, 16, ...block.after);
+  await backup(after);
+  if (after.identity.some((v, i) => v !== before.identity[i]) || after.bytes.some((v, i) => v !== expected[i])) throw new Error('写后回读与预期不一致；已保存回读备份，请检查电台。');
+  progress(1, 1, '写入完成，全部配置已回读核对');
+  return after;
+}
+
+export interface WriteChange { target: string; field: string; before: string; after: string }
+export function describeWrite(snapshot: RadioSnapshot, plan: WritePlan): WriteChange[] {
+  const next = { ...snapshot, bytes: [...snapshot.bytes] };
+  for (const block of plan.blocks) next.bytes.splice(block.address, 16, ...block.after);
+  const before = parseDat(snapshotDat(snapshot)), after = parseDat(snapshotDat(next)), changes: WriteChange[] = [];
+  const add = (target: string, field: string, a: string, b: string) => { if (a !== b) changes.push({ target, field, before: a || '关闭 / 空', after: b || '关闭 / 空' }); };
+  const labels: Partial<Record<keyof Channel, string>> = { name: '名称', rx: '接收频率', tx: '发射频率', rxTone: '接收哑音', txTone: '发射哑音', power: '功率', bandwidth: '带宽', busy: '繁忙禁发', scanAdd: '扫描添加', pttId: 'PTT-ID', signalCode: '信令码组', optionalSignal: '可选信令', muteMode: '静音方式', scramble: '扰频' };
+  const channelValue = (c: Channel, key: keyof Channel) => {
+    const v = c[key];
+    if (typeof v === 'boolean') return v ? '开启' : '关闭';
+    if (key === 'bandwidth') return v === 'wide' ? '宽带' : '窄带';
+    if (key === 'power') return POWER_LABEL[String(v)] ?? String(v);
+    if (key === 'signalCode') return String(Number(v) + 1);
+    if (key === 'pttId') return PTT_OPTIONS[Number(v)] ?? String(v);
+    if (key === 'optionalSignal') return SIGNAL_OPTIONS[Number(v)] ?? String(v);
+    if (key === 'muteMode') return MUTE_OPTIONS[Number(v)] ?? String(v);
+    if (key === 'rx' || key === 'tx') return v ? `${v} MHz` : '仅接收';
+    return String(v ?? '');
+  };
+  for (const slot of [...new Set([...plan.channels, ...plan.names])].sort((a, b) => a - b)) {
+    const a = before.channels.find(c => c.slot === slot), b = after.channels.find(c => c.slot === slot), target = `信道 ${slotLabel(slot)}`;
+    if (!a || !b) { add(target, b ? '新增信道' : '删除信道', a ? `${a.name} ${a.rx} MHz` : '空闲', b ? `${b.name} ${b.rx} MHz` : '空闲'); continue; }
+    for (const key of Object.keys(labels) as (keyof Channel)[]) add(target, labels[key]!, channelValue(a, key), channelValue(b, key));
+  }
+  for (const d of MENU_SETTINGS) add('整机设置', d.label, d.options[before.settings.menu[d.key]] ?? `原值 ${before.settings.menu[d.key]}`, d.options[after.settings.menu[d.key]] ?? `原值 ${after.settings.menu[d.key]}`);
+  for (let b = 0; b < 4; b++) {
+    const target = `${'ABCD'[b]} 区`, a = before.settings.vfo[b], z = after.settings.vfo[b];
+    for (const d of VFO_SETTINGS) add(target, d.label, d.options[a[d.key]] ?? `原值 ${a[d.key]}`, d.options[z[d.key]] ?? `原值 ${z[d.key]}`);
+    for (const key of ['frequency', 'offset', 'rxTone', 'txTone']) {
+      const label = { frequency: '频率', offset: '频差', rxTone: '接收哑音', txTone: '发射哑音' }[key]!;
+      const format = (v: number) => key.includes('Tone') ? decodeTone(v) : v < 0 ? '保留原值' : `${(v / (key === 'frequency' ? 100000 : 1000)).toFixed(key === 'frequency' ? 5 : 3)} MHz`;
+      add(target, label, format(a[key]), format(z[key]));
+    }
+  }
+  add('开机显示', '文字', before.settings.text?.boot ?? '', after.settings.text?.boot ?? '');
+  return changes;
 }

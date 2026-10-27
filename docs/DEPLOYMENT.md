@@ -60,3 +60,14 @@ docker exec d500-web wget -q -O - http://127.0.0.1:8080/health
 - 连接电台通过浏览器 Web Serial 访问用户选择的本机写频线。HTTPS 响应应包含 `Permissions-Policy: camera=(), microphone=(), geolocation=(), serial=(self)`；NPM 不得额外下发冲突的 `serial=()`。服务器不连接 USB，也不接收读机内容。
 
 v0.3.0-beta.1 更新了容器侧权限头。回退到旧版文件编辑器时，也应恢复对应版本的 `deploy/nginx.conf` 并重建容器。
+
+
+### 可选代理入口
+
+若内网 SSH 不可用，可通过本机现有代理访问同一服务器，不需要修改用户 SSH 配置：
+
+```sh
+D500_SSH_HOST=d500-host D500_SSH_PROXY_COMMAND='nc -X 5 -x 127.0.0.1:7897 %h %p' bash scripts/deploy.sh
+```
+
+发布前核对远端 `/opt/d500-web/current` 和容器；发布后核对公网版本与静态资源。代理地址为本机环境示例，不是站点依赖。

@@ -1,29 +1,34 @@
 import { useState } from 'react';
 import { RotateCcw, Settings2 } from 'lucide-react';
 import type { DatTemplate, RadioSettings } from '../lib/model';
-import { MENU_SETTINGS, VFO_SETTINGS, readSettings, settingsChanges, type SettingDefinition } from '../lib/settings';
+import { MENU_SETTINGS, VFO_SETTINGS, completeSettings, readSettings, settingsChanges, validateSettings, type SettingDefinition } from '../lib/settings';
+import { decodeTone, encodeTone } from '../lib/tone';
+import ToneEditor from './ToneEditor';
 
 function SettingSelect({ definition: d, value, before, onChange }: { definition: SettingDefinition; value: number; before: number; onChange: (value: number) => void }) {
   return <label className={`device-field ${value !== before ? 'modified' : ''}`}><span>{d.label}{value !== before && <i title="已修改" />}</span><select aria-label={d.label} value={value} onChange={e => onChange(Number(e.target.value))}>
     {d.options.map((label, i) => <option key={i} value={i}>{label}</option>)}{!d.options[value] && <option value={value}>保留原值 · {value}</option>}
   </select></label>;
 }
+function DecimalField({ label, value, scale, max, onChange }: { label: string; value: number; scale: number; max: number; onChange: (value: number) => void }) {
+  const formatted = value < 0 ? '' : (value / scale).toFixed(Math.log10(scale));
+  const [draft, setDraft] = useState<string | null>(null);
+  const invalid = draft !== null && (!/^\d+(?:\.\d*)?$/.test(draft) || Number(draft) < (scale === 100000 ? 0.00001 : 0) || Number(draft) > max || (draft.split('.')[1]?.length ?? 0) > Math.log10(scale));
+  return <label className="device-field"><span>{label} <small>MHz</small></span><input className="mono" aria-label={label} inputMode="decimal" value={draft ?? formatted} aria-invalid={invalid} placeholder="保留原值" onChange={e => setDraft(e.target.value)} onBlur={() => { if (draft !== null && !invalid && draft.trim()) { onChange(Math.round(Number(draft) * scale)); setDraft(null); } }} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setDraft(null); }} />{invalid && <small className="inline-error">最多 {Math.log10(scale)} 位小数，范围 0–{max} MHz</small>}</label>;
+}
 export default function RadioSettingsPanel({ template, settings, onChange, onImport }: { template: DatTemplate | null; settings?: RadioSettings; onChange: (settings: RadioSettings) => void; onImport: () => void }) {
-  const [tab, setTab] = useState('general');
-  if (!template) return <section className="device-panel"><div className="empty-state"><Settings2 size={34} /><h3>导入 DAT 后编辑电台设置</h3><p>载入旧版 D500 原厂导出文件。</p><button className="btn primary" onClick={onImport}>导入 DAT</button></div></section>;
-  const baseline = readSettings(template.rows), values = settings ?? baseline;
-  const changeCount = settingsChanges(values, baseline);
-  const groups = [...new Set(MENU_SETTINGS.map(d => d.group))];
+  const [tab, setTab] = useState('general'), [extra, setExtra] = useState(false);
+  if (!template) return <section className="device-panel"><div className="empty-state"><Settings2 size={30} /><h3>尚未载入电台配置</h3><p>读取电台或导入 DAT 后编辑。</p><button className="btn primary" onClick={onImport}>导入 DAT</button></div></section>;
+  const baseline = readSettings(template.rows), values = completeSettings(settings, baseline);
+  const changeCount = settingsChanges(values, baseline), groups = [...new Set(MENU_SETTINGS.map(d => d.group))];
+  const updateVfo = (bank: number, key: string, value: number) => onChange({ ...values, vfo: values.vfo.map((v, i) => i === bank ? { ...v, [key]: value } : v) });
   return <section className="device-panel">
-    <div className="panel-head"><div><h2>电台设置 <span className="tag">D500 V1</span></h2><p>{template.fileName} · {MENU_SETTINGS.length} 项整机设置 · 4 个频率区</p></div><button className="btn" disabled={!changeCount} onClick={() => onChange(baseline)}><RotateCcw size={14} />恢复模板设置</button></div>
-    <div className="device-tabs" role="tablist" aria-label="电台设置分类">{[['general', '整机设置'], ['vfo', '频率模式 A / B / C / D'], ['data', 'DAT 数据范围']].map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}<span>{changeCount ? `${changeCount} 项已修改` : '与模板一致'}</span></div>
+    <div className="panel-head"><div><h2>电台设置</h2><p>{template.fileName}</p></div><button className="btn" disabled={!changeCount} onClick={() => onChange(baseline)}><RotateCcw size={14} />恢复载入值</button></div>
+    <div className="device-tabs" role="tablist" aria-label="电台设置分类">{[['general', '整机'], ['vfo', '频率模式'], ['display', '开机显示']].map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}<span>{changeCount ? `${changeCount} 项修改` : '未修改'}</span></div>
     {tab === 'general' && <div className="device-groups">{groups.map(group => <article className="device-card" key={group}><h3>{group}</h3><div className="device-fields">{MENU_SETTINGS.filter(d => d.group === group).map(d => <SettingSelect key={d.key} definition={d} value={values.menu[d.key]} before={baseline.menu[d.key]} onChange={value => onChange({ ...values, menu: { ...values.menu, [d.key]: value } })} />)}</div></article>)}</div>}
-    {tab === 'vfo' && <div className="vfo-grid">{values.vfo.map((vfo, b) => {
-      const digits = template.rows[240 + b * 2].slice(3, 11);
-      const freq = digits.every(v => v <= 9) ? (Number(digits.join('')) / 100000).toFixed(5) : '原始值';
-      return <article className="device-card" key={b}><h3><span className="vfo-letter">{'ABCD'[b]}</span><span className="mono">{freq} <small>MHz</small></span></h3><div className="device-fields">{VFO_SETTINGS.map(d => <SettingSelect key={d.key} definition={{ ...d, label: `${'ABCD'[b]} 区 ${d.label}` }} value={vfo[d.key]} before={baseline.vfo[b][d.key]} onChange={value => onChange({ ...values, vfo: values.vfo.map((v, i) => i === b ? { ...v, [d.key]: value } : v) })} />)}</div><p className="field-tip">频点、频差数值与哑音沿用模板。</p></article>;
-    })}</div>}
-    {tab === 'data' && <div className="data-scope"><h3>已确认的数据范围</h3><dl><dt>信道 000–199</dt><dd>收发频率、名称、CTCSS / DCS、功率、带宽、扫描、PTT-ID、繁忙禁发、信令与扰频。</dd><dt>整机菜单与频率模式</dt><dd>本页可编辑字段已对照官方 V1 写频软件的保存逻辑。</dd><dt>其他数据</dt><dd>信令码组内容、FM 广播、开机文字、密码、校准及未确认区域按原始 DAT 保留。</dd></dl><p>导出后仍通过原厂 V1 软件写入电台；尚未进行实机写入验证。</p><a href="https://github.com/JukZeon/d500-web/blob/main/docs/DAT_FORMAT.md" target="_blank" rel="noreferrer">查看格式研究与验证记录 ↗</a></div>}
-    <div className="device-footnote">修改随方案自动保存，并写入导出的 DAT。数值型延迟项目沿用原厂软件的档位标号。</div>
+    {tab === 'vfo' && <><div className="vfo-grid">{values.vfo.slice(0, extra ? 4 : 2).map((vfo, b) => <article className="device-card" key={b}><h3><span className="vfo-letter">{'ABCD'[b]}</span>{b < 2 ? '频率模式' : '备用频率区'}</h3><div className="device-fields"><DecimalField key={`${template.fileName}-${b}-frequency-${vfo.frequency}`} label={`${'ABCD'[b]} 区频率`} value={vfo.frequency} scale={100000} max={999.99999} onChange={value => updateVfo(b, 'frequency', value)} /><DecimalField key={`${template.fileName}-${b}-offset-${vfo.offset}`} label={`${'ABCD'[b]} 区频差`} value={vfo.offset} scale={1000} max={99.999} onChange={value => updateVfo(b, 'offset', value)} />{(['rxTone', 'txTone'] as const).map((key, i) => <div className="vfo-tone" key={key}><span>{i ? '发射哑音 · 编码' : '接收哑音 · 解码'}</span><ToneEditor label={`${'ABCD'[b]} 区${i ? '发射' : '接收'}哑音`} value={decodeTone(vfo[key])} onChange={value => updateVfo(b, key, encodeTone(value))} /></div>)}{VFO_SETTINGS.map(d => <SettingSelect key={d.key} definition={{ ...d, label: `${'ABCD'[b]} 区 ${d.label}` }} value={vfo[d.key]} before={baseline.vfo[b][d.key]} onChange={value => updateVfo(b, d.key, value)} />)}</div></article>)}</div><button className="text-btn extra-vfo" onClick={() => setExtra(!extra)}>{extra ? '收起 C / D 区' : '显示 DAT 中的 C / D 区'}</button></>}
+    {tab === 'display' && <div className="boot-editor"><h3>开机文字</h3><input aria-label="开机文字" value={values.text?.boot ?? ''} onChange={e => onChange({ ...values, text: { ...values.text, boot: e.target.value } })} /><p>最多 15 个英文、数字或符号。可填写呼号 BA7KTC。</p>{values.text?.boot !== baseline.text?.boot && !/^[\x20-\x7e]{0,15}$/.test(values.text?.boot ?? '') && <p className="inline-error">请使用 15 个以内的可打印 ASCII 字符。</p>}</div>}
+    {validateSettings(values, baseline).map((message, i) => <p className="inline-error settings-error" role="alert" key={i}>{message}</p>)}
+    <div className="device-footnote">修改随方案保存。写入前可选择只同步信道、只同步设置或全部修改。</div>
   </section>;
 }
