@@ -23,17 +23,18 @@ const power = (v: unknown): Power => {
   if (!s || ['低', 'l', 'low', '2', '低功率'].includes(s)) return 'low';
   throw new Error(`未知功率“${clean(v)}”，请使用 高 / 中 / 低`);
 };
-type Field = 'slot' | 'name' | 'rx' | 'tx' | 'rxTone' | 'txTone' | 'rxType' | 'txType' | 'power' | 'bandwidth' | 'busy' | 'group' | 'note';
+type Field = 'slot' | 'name' | 'rx' | 'tx' | 'rxTone' | 'txTone' | 'rxType' | 'txType' | 'rxDcs' | 'txDcs' | 'power' | 'bandwidth' | 'busy' | 'group' | 'note';
 const aliases: Record<Field, string[]> = {
   slot: ['信道编号0199', '信道编号', '信道号', '信道', 'channel', 'channelnumber', 'no', '#', '序号'],
   name: ['信道名称', '名称', 'name', 'channelname', 'chname'],
   rx: ['接收频率mhz', '接收频率', '接收', 'rxfreq', 'rxfrequency', 'rx', 'frequency', '频率'],
   tx: ['发射频率mhz', '发射频率', '发射', 'txfreq', 'txfrequency', 'tx', '发送频率'],
-  rxTone: ['接收亚音', '接收亚音频', '接收亚音数值', 'rxtone', 'rxctcssdcs', 'rctcs', 't_sql', 'tonesql'],
-  txTone: ['发射亚音', '发送亚音', '发射亚音数值', 'txtone', 'txctcssdcs', 'tctcs', 'tone'],
-  rxType: ['rxtonetype', '接收亚音类型'], txType: ['txtonetype', '发射亚音类型'],
-  power: ['功率', '发射功率', 'power', 'txpower'],
-  bandwidth: ['带宽', 'bandwidth', 'bw', 'mode', '模式', '调制模式'],
+  rxTone: ['接收亚音', '接收亚音频', '接收亚音频hz', '接收亚音数值', 'rxtone', 'rxctcssdcs', 'rctcs', 'tsql', 'tonesql'],
+  txTone: ['发射亚音', '发送亚音', '发送亚音频hz', '发射亚音频hz', '发射亚音数值', 'txtone', 'txctcssdcs', 'tctcs', 'tone'],
+  rxType: ['rxtonetype', '接收亚音类型', '接收亚音频类型'], txType: ['txtonetype', '发射亚音类型', '发送亚音类型'],
+  rxDcs: ['接收亚音数码', 'rxdcs'], txDcs: ['发送亚音数码', '发射亚音数码', 'txdcs'],
+  power: ['功率', '发射功率', '发送功率', 'power', 'txpower'],
+  bandwidth: ['带宽', 'bandwidth', 'bw', 'mode', '调制模式'],
   busy: ['繁忙禁发', 'bcl', 'busy', 'busylock', 'busylockout'],
   group: ['分组', 'group', '区域', 'zone', '分类'], note: ['备注', 'note', 'notes', 'comment', '说明'],
 };
@@ -45,14 +46,15 @@ function findColumns(row: unknown[]): Partial<Record<Field, number>> {
   }
   return map;
 }
-function tone(value: unknown, type: unknown): string {
+function tone(value: unknown, type: unknown, dcsValue?: unknown): string {
   const s = clean(value).toUpperCase(), t = clean(type).toUpperCase();
   if (['NONE', 'OFF', '无', '0'].includes(t)) return '';
+  if (/DCS|数字|数码/.test(t) && clean(dcsValue)) return 'D' + clean(dcsValue).replace(/^D/i, '').replace(/[NI]$/i, '').padStart(3, '0') + (/反|INV|DCSI|DCS I|DCSH/.test(t) || /I$/.test(clean(dcsValue)) ? 'I' : 'N');
   if (!s || s === '-' || s === '0' || s === 'OFF') return '';
   if (t.includes('DCS')) return 'D' + s.replace(/^D/, '').replace(/[NI]$/, '').padStart(3, '0') + (t.includes('I') || /I$/.test(s) ? 'I' : 'N');
   return s.replace(/HZ$/, '');
 }
-export interface WorkbookImport { channels: Channel[]; sheetName: string; warnings: string[]; detected: string }
+export interface WorkbookImport { channels: Channel[]; sheetName: string; warnings: string[]; detected: string; providedFields: string[] }
 export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImport {
   if (data.byteLength > 8 * 1024 * 1024) throw new Error('表格超过 8 MB，请只保留需要导入的信道工作表。');
   const book = XLSX.read(data, { type: 'array', cellFormula: false, cellHTML: false, sheetRows: 1200 });
@@ -75,7 +77,7 @@ export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImp
       const rx = asFreq(get('rx')), tx = columns.tx === undefined ? rx : asFreq(get('tx'));
       const bw = clean(get('bandwidth')).toLowerCase();
       if (bw && !['wide', '宽', '宽带', 'w', 'fm', '25', '25k', '25khz', 'narrow', '窄', '窄带', 'n', 'nfm', '12.5', '12.5k', '12.5khz', '0', '1'].includes(bw)) throw new Error(`表格第 ${i + 1} 行带宽“${bw}”不支持`);
-      const c: Channel = { ...newChannel(slot), name: clean(get('name')), rx, tx, rxTone: tone(get('rxTone'), get('rxType')), txTone: tone(get('txTone'), get('txType')), power: power(get('power')), bandwidth: ['wide', '宽', '宽带', 'w', 'fm', '25', '25k', '25khz', '0'].includes(bw) ? 'wide' : 'narrow', busy: bool(get('busy')), group: clean(get('group')), note: clean(get('note')) };
+      const c: Channel = { ...newChannel(slot), name: clean(get('name')), rx, tx, rxTone: tone(get('rxTone'), get('rxType'), get('rxDcs')), txTone: tone(get('txTone'), get('txType'), get('txDcs')), power: power(get('power')), bandwidth: ['wide', '宽', '宽带', 'w', 'fm', '25', '25k', '25khz', '0'].includes(bw) ? 'wide' : 'narrow', busy: bool(get('busy')), group: clean(get('group')), note: clean(get('note')) };
       channels.push(c);
       if (channels.length > 200) throw new Error('信道超过 200 条，请分成多个方案。');
     }
@@ -84,7 +86,7 @@ export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImp
     if (errors.length) throw new Error(`信道 ${slotLabel(errors[0].slot)}：${errors[0].message}（共 ${errors.length} 个问题）`);
     if (isK5) warnings.push('已识别 K5Web 表格：信道 200 对应 D500 的 000，1–199 保持原号。');
     warnings.push('只转换已支持的信道字段；扫描列表、步进、信令等由原始 DAT 模板保留。');
-    return { channels, sheetName, warnings, detected: isK5 ? 'K5Web / K1' : /csv$/i.test(fileName) ? 'CSV' : 'D500 / 通用表格' };
+    return { channels, sheetName, warnings, detected: isK5 ? 'K5Web / K1' : /csv$/i.test(fileName) ? 'CSV' : 'D500 / 通用表格', providedFields: Object.keys(columns) };
   }
   throw new Error('没有找到接收频率列。请使用“下载模板”，或在前 20 行放置“接收频率 / RX Frequency”表头。');
 }

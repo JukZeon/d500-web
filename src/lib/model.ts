@@ -1,6 +1,7 @@
 export type Power = 'high' | 'mid' | 'low' | `raw:${number}`;
 export interface Channel {
   slot: number;
+  sourceSlot?: number;
   name: string;
   rx: string;
   tx: string;

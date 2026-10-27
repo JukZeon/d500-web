@@ -1,0 +1,27 @@
+services:
+  d500-web:
+    image: nginxinc/nginx-unprivileged:stable-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
+    container_name: d500-web
+    restart: unless-stopped
+    read_only: true
+    volumes:
+      - ./current:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - proxy
+    expose:
+      - '8080'
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/health']
+      interval: 30s
+      timeout: 3s
+      retries: 3
+networks:
+  proxy:
+    external: true

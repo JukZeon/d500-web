@@ -37,6 +37,7 @@ export function decodeFrequency(bytes: number[]): string {
 }
 export function encodeTone(text: string): number {
   const t = text.trim().toUpperCase().replace(/HZ$/, '').trim();
+  if (/^RAW:\d{1,5}$/.test(t) && Number(t.slice(4)) <= 65535) return Number(t.slice(4));
   if (!t || ['OFF', '-', '无', '0'].includes(t)) return 0;
   const dcs = /^D?(\d{3})([NI])?$/.exec(t);
   if (dcs && (t.startsWith('D') || !!dcs[2])) {
@@ -50,6 +51,7 @@ export function encodeTone(text: string): number {
 export function decodeTone(value: number): string {
   if (!value) return '';
   if (value <= 210) return `D${DCS_CODES[(value - 1) % 105]}${value > 105 ? 'I' : 'N'}`;
+  if (value < 600 || value > 2600) return `RAW:${value}`;
   return (value / 10).toFixed(1);
 }
 export function parseDat(text: string, fileName = 'D500.dat'): { channels: Channel[]; template: DatTemplate; warnings: string[] } {
@@ -67,7 +69,7 @@ export function parseDat(text: string, fileName = 'D500.dat'): { channels: Chann
       try { name = decodeName(rows[256 + slot].slice(3)); }
       catch { warnings.push(`信道 ${slotLabel(slot)} 名称不能按 GBK 解码；未编辑时保留原始名称字节。`); }
       const power: Power = (['high', 'mid', 'low'] as const)[p[14]] ?? `raw:${p[14]}`;
-      channels.push({ ...newChannel(slot), name, rx, tx, rxTone: decodeTone(p[8] | p[9] << 8), txTone: decodeTone(p[10] | p[11] << 8), power, bandwidth: p[15] & 64 ? 'narrow' : 'wide', busy: !!(p[15] & 8) });
+      channels.push({ ...newChannel(slot), sourceSlot: slot, name, rx, tx, rxTone: decodeTone(p[8] | p[9] << 8), txTone: decodeTone(p[10] | p[11] << 8), power, bandwidth: p[15] & 64 ? 'narrow' : 'wide', busy: !!(p[15] & 8) });
     } catch (e) {
       // Do not silently drop a record and then clear it on export.
       throw new Error(`信道 ${slotLabel(slot)} 无法解析：${e instanceof Error ? e.message : String(e)}。已停止导入，原文件保持不变。`);
@@ -89,7 +91,8 @@ export function validateChannels(channels: Channel[]): Issue[] {
       try { encodeFrequency(c[f]); } catch (e) { add(f, (e as Error).message); }
     }
     for (const f of ['rxTone', 'txTone'] as const) try { encodeTone(c[f]); } catch (e) { add(f, (e as Error).message); }
-    if (!['high', 'mid', 'low'].includes(c.power) && !/^raw:\d{1,3}$/.test(c.power)) add('power', '功率值无效');
+    if (!['high', 'mid', 'low'].includes(c.power) && (!/^raw:\d{1,3}$/.test(c.power) || Number(c.power.slice(4)) > 255)) add('power', '功率值无效');
+    if (c.sourceSlot !== undefined && (!Number.isInteger(c.sourceSlot) || c.sourceSlot < 0 || c.sourceSlot > 199)) add('slot', '原始信道地址无效');
     if (c.bandwidth !== 'wide' && c.bandwidth !== 'narrow') add('bandwidth', '带宽值无效');
   }
   return issues;
@@ -104,12 +107,14 @@ export function exportDat(channels: Channel[], template: DatTemplate | null): st
   const current = new Map(channels.map(c => [c.slot, c]));
   if (current.size === original.size && channels.every(c => original.has(c.slot) && sameRadioFields(c, original.get(c.slot)!))) return template.original;
   for (let slot = 0; slot < 200; slot++) {
-    const c = current.get(slot), before = original.get(slot);
+    const c = current.get(slot);
+    const origin = c?.sourceSlot ?? slot;
+    const before = original.get(origin);
     if (!c) {
-      if (before) { rows[slot].fill(255, 3); rows[256 + slot].fill(255, 3); }
+      if (original.has(slot)) { rows[slot].fill(255, 3); rows[256 + slot].fill(255, 3); }
       continue;
     }
-    const p = before ? rows[slot].slice(3) : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 68];
+    const p = before ? template.rows[origin].slice(3) : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 68];
     if (!before || c.rx !== before.rx) p.splice(0, 4, ...encodeFrequency(c.rx));
     if (!before || c.tx !== before.tx) p.splice(4, 4, ...(c.tx ? encodeFrequency(c.tx) : [255, 255, 255, 255]));
     for (const [field, offset] of [['rxTone', 8], ['txTone', 10]] as const) if (!before || c[field] !== before[field]) {
@@ -119,6 +124,7 @@ export function exportDat(channels: Channel[], template: DatTemplate | null): st
     if (!before || c.bandwidth !== before.bandwidth) p[15] = p[15] & ~64 | (c.bandwidth === 'narrow' ? 64 : 0);
     if (!before || c.busy !== before.busy) p[15] = p[15] & ~8 | (c.busy ? 8 : 0);
     rows[slot].splice(3, 16, ...p);
+    if (before && origin !== slot && c.name === before.name) rows[256 + slot].splice(3, 16, ...template.rows[256 + origin].slice(3));
     if (!before || c.name !== before.name) {
       const bytes = encodeName(c.name); rows[256 + slot].splice(3, 16, ...Array.from({ length: 16 }, (_, i) => bytes[i] ?? 255));
     }
