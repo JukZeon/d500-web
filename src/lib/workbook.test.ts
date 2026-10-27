@@ -12,6 +12,7 @@ describe('spreadsheets', () => {
     const result = importWorkbook(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, '2605写频表b.xlsx');
     expect(result.channels.length).toBeGreaterThan(100);
     expect(result.channels.find(c => c.slot === 1)?.rx).toBe('438.50000');
+    expect(result.channels.find(c => c.slot === 3)?.rxTone).toBe('D252N');
     expect(result.detected).toBe('K5Web / K1');
   });
   it('round-trips the native workbook, including slot zero, group, note and tones', () => {
@@ -30,6 +31,12 @@ describe('spreadsheets', () => {
   it('rejects duplicate channels instead of silently discarding one', () => {
     const bytes = exportWorkbook([newChannel(2), newChannel(2)], 'bad');
     expect(() => importWorkbook(bytes.buffer as ArrayBuffer, 'bad.xlsx')).toThrow('重复');
+  });
+  it('honors the explicit DCS polarity suffix over a legacy type label', () => {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['#', '接收频率', '接收亚音频类型', '接收亚音数码'], [3, 438.5, 'DCSH', 'D252N']]), '写频表');
+    const result = importWorkbook(XLSX.write(book, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer, 'legacy.xlsx');
+    expect(result.channels[0].rxTone).toBe('D252N');
   });
 });
 describe('project backup', () => {

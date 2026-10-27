@@ -49,7 +49,12 @@ function findColumns(row: unknown[]): Partial<Record<Field, number>> {
 function tone(value: unknown, type: unknown, dcsValue?: unknown): string {
   const s = clean(value).toUpperCase(), t = clean(type).toUpperCase();
   if (['NONE', 'OFF', '无', '0'].includes(t)) return '';
-  if (/DCS|数字|数码/.test(t) && clean(dcsValue)) return 'D' + clean(dcsValue).replace(/^D/i, '').replace(/[NI]$/i, '').padStart(3, '0') + (/反|INV|DCSI|DCS I|DCSH/.test(t) || /I$/.test(clean(dcsValue)) ? 'I' : 'N');
+  if (/DCS|数字|数码/.test(t) && clean(dcsValue)) {
+    const code = clean(dcsValue).toUpperCase();
+    // An explicit N/I suffix is authoritative, even when the type column is DCSH.
+    const suffix = /[NI]$/.test(code) ? code.slice(-1) : /反|INV|DCSI|DCS I/.test(t) ? 'I' : 'N';
+    return 'D' + code.replace(/^D/, '').replace(/[NI]$/, '').padStart(3, '0') + suffix;
+  }
   if (!s || s === '-' || s === '0' || s === 'OFF') return '';
   if (t.includes('DCS')) return 'D' + s.replace(/^D/, '').replace(/[NI]$/, '').padStart(3, '0') + (t.includes('I') || /I$/.test(s) ? 'I' : 'N');
   return s.replace(/HZ$/, '');
