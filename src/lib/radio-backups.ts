@@ -10,6 +10,7 @@ async function database(): Promise<IDBDatabase> {
   });
 }
 export async function saveRadioBackup(snapshot: RadioSnapshot): Promise<void> {
+  if (snapshot.source === 'write-ack') throw new Error('写入状态不是读机备份');
   const db = await database();
   try {
     await new Promise<void>((resolve, reject) => {

@@ -60,9 +60,9 @@ export default function RadioPanel({ visible, workspace, onRead, onWritten, onCo
     setPreview(null);
     addTrace({ at: new Date().toISOString(), direction: 'INFO', hex: `开始写入 · v${version} · ${scope} · ${plan.blocks.length} 块` });
     try {
-      const result = await programWorkspace(open, workspace, plan, scope, saveRadioBackup, report, controller.signal);
+      const result = await programWorkspace(open, workspace, { snapshot, plan }, scope, saveRadioBackup, report, controller.signal);
       onWritten(acceptWriteResult(workspace, result, scope));
-      setSnapshot(result); status('写入完成 · 校验通过');
+      setSnapshot(result); status('写入完成');
     } catch (e) { setSnapshot(null); status(e instanceof Error ? e.message : String(e), true); }
     finally { abort.current = null; busy(false); setBackups(await listRadioBackups().catch(() => backups)); }
   }

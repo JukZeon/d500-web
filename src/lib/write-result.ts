@@ -2,7 +2,7 @@ import type { Workspace } from './model';
 import { parseDat } from './dat';
 import { planWrite, snapshotDat, type RadioSnapshot, type WriteScope } from './radio';
 
-/** Rebase on verified device data, retaining pending edits from the other scope. */
+/** Rebase on acknowledged writes, retaining pending edits from the other scope. */
 export function acceptWriteResult(workspace: Workspace, snapshot: RadioSnapshot, scope: WriteScope): Workspace {
   const actual = parseDat(snapshotDat(snapshot), workspace.template?.fileName);
   const desired = { ...snapshot, bytes: [...snapshot.bytes] };

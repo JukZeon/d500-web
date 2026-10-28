@@ -19,6 +19,8 @@ export interface RadioSnapshot {
   bytes: number[];
   hardwareVerified: false;
   communicationProfile?: 'cps-2025';
+  /** ACK-only state is used for the next delta; it is never saved as a read backup. */
+  source?: 'radio-read' | 'write-ack';
 }
 export type Progress = (done: number, total: number, label: string) => void;
 export interface WriteBlock { address: number; before: number[]; after: number[] }
@@ -134,10 +136,10 @@ export class D500Protocol {
       catch (error) { checkAbort(signal); throw new Error(`读取配置 ${addressText(address)} 失败：${error instanceof Error ? error.message : String(error)}`); }
       progress(address + 64, CONFIG_SIZE, `读取配置 ${addressText(address)}`);
     }
-    return { schema: 'd500-radio-read-v1', capturedAt: new Date().toISOString(), identity: [...identity], bytes: [...bytes], hardwareVerified: false, communicationProfile: 'cps-2025' };
+    return { schema: 'd500-radio-read-v1', capturedAt: new Date().toISOString(), identity: [...identity], bytes: [...bytes], hardwareVerified: false, communicationProfile: 'cps-2025', source: 'radio-read' };
   }
   /** A dedicated write session follows the factory capture: password ACK, X/ACK,
-   * then host ACK + X/ACK for each following block. Verification uses a new session. */
+   * then host ACK + X/ACK for each following block. */
   async writeBlocks(plan: WritePlan, identity: number[], progress: Progress, signal?: AbortSignal) {
     validatePlan(plan);
     const actualIdentity = await this.identify(signal);
@@ -170,23 +172,17 @@ export function scopePlan(plan: WritePlan, scope: WriteScope): WritePlan {
   return { blocks, channels: plan.channels.filter(c => blocks.some(b => b.address === c * 16)), names: plan.names.filter(c => blocks.some(b => b.address === (256 + c) * 16)), settings: blocks.filter(b => b.address >= 3200 && b.address < 4096).length, changedBytes: blocks.reduce((n, b) => n + b.after.filter((v, i) => v !== b.before[i]).length, 0) };
 }
 export type SessionFactory = () => Promise<RadioLink & { close(): Promise<void> }>;
-/** Three separate port sessions match CPS operations and prevent queued read ACKs
- * from being mistaken for write acknowledgements. Backup is durable before X. */
-export async function programWorkspace(open: SessionFactory, workspace: Workspace, reviewed: WritePlan, scope: WriteScope, backup: (snapshot: RadioSnapshot) => Promise<void>, progress: Progress, signal?: AbortSignal): Promise<RadioSnapshot> {
+/** Direct delta write from the loaded device state. No automatic reread. */
+export async function programWorkspace(open: SessionFactory, workspace: Workspace, input: { snapshot: RadioSnapshot; plan: WritePlan }, scope: WriteScope, backup: (snapshot: RadioSnapshot) => Promise<void>, progress: Progress, signal?: AbortSignal): Promise<RadioSnapshot> {
+  const { snapshot: before, plan: reviewed } = input;
+  validSnapshot(before);
   validatePlan(reviewed);
   if (!reviewed.blocks.length) throw new Error('没有需要写入的修改。');
-  async function read(label: string) {
-    progress(0, 1, label);
-    const link = await open();
-    try { return await new D500Protocol(link).readImage((done, total) => progress(done, total, label), signal); }
-    catch (error) { checkAbort(signal); throw new Error(`${label}失败：${error instanceof Error ? error.message : String(error)}`); }
-    finally { await link.close(); }
-  }
-  const before = await read('写前检查');
   const fresh = scopePlan(planWrite(before, workspace), scope);
-  if (JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('电台数据已变化，请重新读取。');
-  await backup(before); checkAbort(signal);
-  progress(0, 1, '连接写入会话');
+  if (JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('方案已变化，请重试。');
+  // Preserve the last actual read. Acknowledged expected bytes are not a read backup.
+  if (before.source !== 'write-ack') await backup(before);
+  checkAbort(signal); progress(0, 1, '连接电台');
   const link = await open(); let writingStarted = false;
   try {
     writingStarted = true;
@@ -194,15 +190,10 @@ export async function programWorkspace(open: SessionFactory, workspace: Workspac
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}${writingStarted ? ' 写入未完成，请重新读取。' : ''}`);
   } finally { await link.close(); }
-  let after: RadioSnapshot;
-  try { after = await read('回读校验'); }
-  catch (error) { throw new Error(`写后回读失败：${error instanceof Error ? error.message : String(error)} 请重新读取。`); }
   const expected = [...before.bytes];
   for (const block of fresh.blocks) expected.splice(block.address, 16, ...block.after);
-  await backup(after);
-  if (after.identity.some((v, i) => v !== before.identity[i]) || after.bytes.some((v, i) => v !== expected[i])) throw new Error('写后校验不一致，回读备份已保存。');
-  progress(1, 1, '写入完成，校验通过');
-  return after;
+  progress(1, 1, '写入完成');
+  return { ...before, capturedAt: new Date().toISOString(), bytes: expected, source: 'write-ack' };
 }
 
 export interface WriteChange { target: string; field: string; before: string; after: string }

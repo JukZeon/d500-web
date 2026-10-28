@@ -17,7 +17,7 @@ function written(workspace: Workspace, before: RadioSnapshot, scope: WriteScope)
   for (const b of scopePlan(planWrite(before, workspace), scope).blocks) after.bytes.splice(b.address, 16, ...b.after);
   return after;
 }
-describe('verified write baseline', () => {
+describe('acknowledged write baseline', () => {
   it('allows a subsequent write to restore the original value instead of losing that edit', () => {
     const { workspace, snapshot } = setup();
     workspace.channels[0].name = 'EDIT'; workspace.channels[0].group = 'Local'; workspace.channels[0].note = 'Keep';
