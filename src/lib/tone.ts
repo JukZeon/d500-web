@@ -7,10 +7,10 @@ export function encodeTone(text: string): number {
   const dcs = /^D?(\d{3})([NI])?$/.exec(t);
   if (dcs && (t.startsWith('D') || !!dcs[2])) {
     const i = DCS_CODES.indexOf(dcs[1]);
-    if (i < 0) throw new Error('DCS 编码不在标准码表中');
+    if (i < 0) throw new Error('DCS 码无效');
     return i + 1 + (dcs[2] === 'I' ? 105 : 0);
   }
-  if (!/^\d{2,3}(?:\.\d)?$/.test(t) || Number(t) < 60 || Number(t) > 260) throw new Error('亚音使用 88.5 或 D023N / D023I 格式');
+  if (!/^\d{2,3}(?:\.\d)?$/.test(t) || Number(t) < 60 || Number(t) > 260) throw new Error('哑音格式：88.5 / D023N / D023I');
   return Math.round(Number(t) * 10);
 }
 export function decodeTone(value: number): string {

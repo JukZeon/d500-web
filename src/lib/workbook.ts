@@ -20,7 +20,7 @@ const power = (v: unknown): Power => {
   if (['高', 'h', 'high', '0', '高功率'].includes(s)) return 'high';
   if (/^raw:[0-3]$/.test(s)) return s as Power;
   if (!s || ['低', 'l', 'low', '1', '低功率'].includes(s)) return 'low';
-  throw new Error(`旧版 D500 仅支持高、低两档功率，无法使用“${clean(v)}”`);
+  throw new Error(`功率“${clean(v)}”无效，仅支持高 / 低两档`);
 };
 type Field = 'slot' | 'name' | 'rx' | 'tx' | 'rxTone' | 'txTone' | 'rxType' | 'txType' | 'rxDcs' | 'txDcs' | 'power' | 'bandwidth' | 'busy' | 'group' | 'note' | 'scanAdd' | 'pttId' | 'signalCode' | 'optionalSignal' | 'muteMode' | 'scramble';
 const aliases: Record<Field, string[]> = {
@@ -69,11 +69,11 @@ function enumValue(value: unknown, options: string[], label: string): number {
   const alias = options.findIndex(v => v.toUpperCase().split(' ').includes(short));
   if (alias >= 0) return alias;
   if (/^\d{1,2}$/.test(s)) return Number(s);
-  throw new Error(`${label}“${s}”无效，请使用导出表格中的选项`);
+  throw new Error(`${label}“${s}”无效`);
 }
 export interface WorkbookImport { channels: Channel[]; sheetName: string; warnings: string[]; detected: string; providedFields: string[] }
 export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImport {
-  if (data.byteLength > 8 * 1024 * 1024) throw new Error('表格超过 8 MB，请只保留需要导入的信道工作表。');
+  if (data.byteLength > 8 * 1024 * 1024) throw new Error('表格超过 8 MB');
   const book = XLSX.read(data, { type: 'array', cellFormula: false, cellHTML: false, sheetRows: 1200 });
   for (const sheetName of book.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[sheetName], { header: 1, defval: '', raw: true });
@@ -96,19 +96,19 @@ export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImp
       if (bw && !['wide', '宽', '宽带', 'w', 'fm', '25', '25k', '25khz', 'narrow', '窄', '窄带', 'n', 'nfm', '12.5', '12.5k', '12.5khz', '0', '1'].includes(bw)) throw new Error(`表格第 ${i + 1} 行带宽“${bw}”不支持`);
       const c: Channel = { ...newChannel(slot), name: clean(get('name')), rx, tx, rxTone: tone(get('rxTone'), get('rxType'), get('rxDcs')), txTone: tone(get('txTone'), get('txType'), get('txDcs')), power: power(get('power')), bandwidth: ['wide', '宽', '宽带', 'w', 'fm', '25', '25k', '25khz', '0'].includes(bw) ? 'wide' : 'narrow', busy: bool(get('busy')), scanAdd: columns.scanAdd === undefined ? true : bool(get('scanAdd')), pttId: enumValue(get('pttId'), PTT_OPTIONS, 'PTT-ID'), signalCode: clean(get('signalCode')) ? Number(get('signalCode')) - 1 : 0, optionalSignal: enumValue(get('optionalSignal'), SIGNAL_OPTIONS, '可选信令'), muteMode: enumValue(get('muteMode'), MUTE_OPTIONS, '静音方式'), scramble: bool(get('scramble')), group: clean(get('group')), note: clean(get('note')) };
       channels.push(c);
-      if (channels.length > 200) throw new Error('信道超过 200 条，请分成多个方案。');
+      if (channels.length > 200) throw new Error('信道超过 200 条');
     }
     if (!channels.length) throw new Error('找到接收频率列，但没有有效信道。');
     const errors = validateChannels(channels).filter(i => i.severity === 'error');
     if (errors.length) throw new Error(`信道 ${slotLabel(errors[0].slot)}：${errors[0].message}（共 ${errors.length} 个问题）`);
-    if (isK5) warnings.push('已识别 K5Web 表格：信道 200 对应 D500 的 000，1–199 保持原号。');
-    if (rows[head].some(v => /信道模式|dtmf解码|扫描列表/i.test(clean(v)))) warnings.push('旧表中的 DMR 模式、DTMF 解码与扫描列表不转换；D500 V1 为模拟电台。未提供的 D500 参数沿用同编号信道。');
+    if (isK5) warnings.push('兼容编号：200 → 000，1–199 不变。');
+    if (rows[head].some(v => /信道模式|dtmf解码|扫描列表/i.test(clean(v)))) warnings.push('DMR、DTMF 解码与扫描列表未导入。');
     const providedFields = Object.keys(columns);
     if (columns.rxType !== undefined || columns.rxDcs !== undefined) providedFields.push('rxTone');
     if (columns.txType !== undefined || columns.txDcs !== undefined) providedFields.push('txTone');
     return { channels, sheetName, warnings, detected: isK5 ? 'K5Web / K1' : /csv$/i.test(fileName) ? 'CSV' : 'D500 / 通用表格', providedFields };
   }
-  throw new Error('没有找到接收频率列。请使用“下载模板”，或在前 20 行放置“接收频率 / RX Frequency”表头。');
+  throw new Error('未找到接收频率列，表头需在前 20 行。');
 }
 export function exportWorkbook(channels: Channel[], name: string): Uint8Array {
   const toneColumns = (s: string) => !s ? ['关闭', '', ''] : /^D\d{3}[NI]$/i.test(s) ? ['DCS', '', s] : /^RAW:/i.test(s) ? ['RAW', s, ''] : ['CTCSS', s, ''];

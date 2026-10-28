@@ -30,7 +30,7 @@ export default function ToneEditor({ value, onChange, label, compact = false }: 
       <select className="tone-preset" aria-label={`${label}预设`} value={custom ? 'custom' : code} onChange={e => {
         if (e.target.value === 'custom') { setDraft(code); setManual(true); } else { setManual(false); setCode(e.target.value); }
       }}>
-        {options.map(t => <option key={t} value={t}>{t}{mode === 'ctcss' ? ' Hz' : ''}</option>)}<option value="custom">手动填写…</option>
+        {options.map(t => <option key={t} value={t}>{t}{mode === 'ctcss' ? ' Hz' : ''}</option>)}<option value="custom">自定义</option>
       </select>
       {custom && <input className="tone-custom mono" aria-label={`${label}手动值`} value={draft} inputMode={mode === 'ctcss' ? 'decimal' : 'numeric'} placeholder={mode === 'dcs' ? '023' : '88.5'} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} onBlur={() => {
         if (!draft.trim()) onChange('');
@@ -41,6 +41,6 @@ export default function ToneEditor({ value, onChange, label, compact = false }: 
       {mode === 'dcs' && <select className="tone-polarity" aria-label={`${label}极性`} value={polarity} onChange={e => onChange(`D${code}${e.target.value}`)}><option value="N">{compact ? 'N' : '正码 N'}</option><option value="I">{compact ? 'I' : '反码 I'}</option></select>}
     </>}
     {error && <span className="tone-error" role="alert">{error}</span>}
-    {mode === 'raw' && <span className="raw-tone mono" title="未识别的原始码值，保持原样；可切换类型重新设置">{value}</span>}
+    {mode === 'raw' && <span className="raw-tone mono" title="未识别的原始值">{value}</span>}
   </div>;
 }

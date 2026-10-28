@@ -54,7 +54,7 @@ export function snapshotDat(snapshot: RadioSnapshot): string {
 }
 export function planWrite(snapshot: RadioSnapshot, workspace: Workspace): WritePlan {
   validSnapshot(snapshot);
-  if (!workspace.template) throw new Error('请先读取电台或导入本机 DAT 模板。');
+  if (!workspace.template) throw new Error('缺少 DAT 模板');
   const before = parseRows(workspace.template.original);
   const after = parseRows(exportDat(workspace.channels, workspace.template, workspace.settings));
   const plan: WritePlan = { blocks: [], channels: [], names: [], settings: 0, changedBytes: 0 };
@@ -71,7 +71,7 @@ export function planWrite(snapshot: RadioSnapshot, workspace: Workspace): WriteP
     for (const field of fields(row, old, next)) {
       const { bytes, mask } = field;
       if (bytes.every(i => (old[i] & mask) === (next[i] & mask))) continue;
-      if (!bytes.every(i => (fresh[i] & mask) === (old[i] & mask)) && !bytes.every(i => (fresh[i] & mask) === (next[i] & mask))) throw new Error(`${addressText(address + bytes[0])} 与 DAT 模板冲突，请重新读取并合并方案。`);
+      if (!bytes.every(i => (fresh[i] & mask) === (old[i] & mask)) && !bytes.every(i => (fresh[i] & mask) === (next[i] & mask))) throw new Error(`${addressText(address + bytes[0])} 数据冲突，请重新读取。`);
       for (const i of bytes) patched[i] = (fresh[i] & ~mask) | (next[i] & mask);
     }
     const changes = patched.filter((v, i) => v !== fresh[i]).length;
@@ -92,7 +92,7 @@ export class D500Protocol {
     try { first = (await this.link.read(1, signal))[0]; }
     catch (error) {
       checkAbort(signal);
-      throw new Error(`电台握手失败：${error instanceof Error ? error.message : String(error)} 请确认写频线未被原厂软件或云电脑占用。`);
+      throw new Error(`电台握手失败：${error instanceof Error ? error.message : String(error)}`);
     }
     if (first !== 6 && first !== 1) throw new Error(`未识别的握手响应 ${hex(Uint8Array.of(first))}；已停止通信。`);
     const identity = first === 6 ? await this.link.read(49, signal) : Uint8Array.of(first, ...await this.link.read(48, signal));
@@ -105,7 +105,7 @@ export class D500Protocol {
     // The 2025 CPS reads this exact status without prompting for a password.
     // Accept only the observed zero-password status, not arbitrary zero-prefixed data.
     const observedUnprotected = password.every((v, i) => v === (i === 12 ? 1 : i === 15 ? 16 : 0));
-    if (!password.slice(0, 6).every(v => v === 0x20) && !observedUnprotected) throw new Error('设备可能设置了读写密码或使用未知密码格式；请使用原厂软件处理后再试。');
+    if (!password.slice(0, 6).every(v => v === 0x20) && !observedUnprotected) throw new Error('设备受密码保护或使用未知密码格式。');
     return identity;
   }
   async readBlock(address: number, length: 16 | 64, signal?: AbortSignal): Promise<Uint8Array> {
@@ -124,7 +124,7 @@ export class D500Protocol {
     return data;
   }
   async readImage(progress: Progress, signal?: AbortSignal): Promise<RadioSnapshot> {
-    progress(0, CONFIG_SIZE, '识别旧版 D500');
+    progress(0, CONFIG_SIZE, '识别电台');
     const identity = await this.identify(signal), bytes = new Uint8Array(CONFIG_SIZE);
     for (let address = 0; address < CONFIG_SIZE; address += 64) {
       checkAbort(signal);
@@ -139,14 +139,14 @@ export class D500Protocol {
   async writeBlocks(plan: WritePlan, identity: number[], progress: Progress, signal?: AbortSignal) {
     validatePlan(plan);
     const actualIdentity = await this.identify(signal);
-    if (identity.length !== actualIdentity.length || identity.some((v, i) => v !== actualIdentity[i])) throw new Error('设备识别信息已变化，已取消写入。');
-    if ((await this.link.read(1, signal))[0] !== 6) throw new Error('电台未确认写入会话，已停止。');
+    if (identity.length !== actualIdentity.length || identity.some((v, i) => v !== actualIdentity[i])) throw new Error('设备识别不一致，写入已取消。');
+    if ((await this.link.read(1, signal))[0] !== 6) throw new Error('电台未确认写入');
     for (const [index, block] of plan.blocks.entries()) {
       checkAbort(signal);
       // A started frame completes atomically; cancellation acts between blocks.
       if (index) await this.link.write(Uint8Array.of(6));
       await this.link.write(Uint8Array.of(0x58, block.address >> 8, block.address & 255, 16, ...block.after));
-      if ((await this.link.read(1))[0] !== 6) throw new Error(`写入 ${addressText(block.address)} 未获确认；已停止，请重新读取检查。`);
+      if ((await this.link.read(1))[0] !== 6) throw new Error(`写入 ${addressText(block.address)} 未获确认，请重新读取。`);
       progress(index + 1, plan.blocks.length, `写入 ${addressText(block.address)}`);
     }
   }
@@ -178,25 +178,25 @@ export async function programWorkspace(open: SessionFactory, workspace: Workspac
     try { return await new D500Protocol(link).readImage((done, total) => progress(done, total, label), signal); }
     finally { await link.close(); }
   }
-  const before = await read('写前读取与检查');
+  const before = await read('写前检查');
   const fresh = scopePlan(planWrite(before, workspace), scope);
-  if (JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('电台内容已变化，写入预览已失效。请重新读取并检查修改。');
+  if (JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('电台数据已变化，请重新读取。');
   await backup(before); checkAbort(signal);
   const link = await open(); let writingStarted = false;
   try {
     writingStarted = true;
     await new D500Protocol(link).writeBlocks(fresh, before.identity, progress, signal);
   } catch (error) {
-    throw new Error(`${error instanceof Error ? error.message : String(error)}${writingStarted ? ' 写入未完成；请重新读取电台核对，勿直接重复写入。' : ''}`);
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${writingStarted ? ' 写入未完成，请重新读取。' : ''}`);
   } finally { await link.close(); }
   let after: RadioSnapshot;
-  try { after = await read('写后回读核对'); }
-  catch (error) { throw new Error(`写入已发送，但回读未完成：${error instanceof Error ? error.message : String(error)} 请重新读取电台核对。`); }
+  try { after = await read('回读校验'); }
+  catch (error) { throw new Error(`写后回读失败：${error instanceof Error ? error.message : String(error)} 请重新读取。`); }
   const expected = [...before.bytes];
   for (const block of fresh.blocks) expected.splice(block.address, 16, ...block.after);
   await backup(after);
-  if (after.identity.some((v, i) => v !== before.identity[i]) || after.bytes.some((v, i) => v !== expected[i])) throw new Error('写后回读与预期不一致；已保存回读备份，请检查电台。');
-  progress(1, 1, '写入完成，全部配置已回读核对');
+  if (after.identity.some((v, i) => v !== before.identity[i]) || after.bytes.some((v, i) => v !== expected[i])) throw new Error('写后校验不一致，回读备份已保存。');
+  progress(1, 1, '写入完成，校验通过');
   return after;
 }
 

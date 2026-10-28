@@ -49,7 +49,7 @@ export class SerialLink implements RadioLink {
         if (done) { if (!this.closed) throw new Error('写频线已断开，请重新连接。'); break; }
         if (!value?.length) continue;
         this.trace({ at: new Date().toISOString(), direction: 'RX', hex: hex(value) });
-        if (this.buffer.length + value.length > 65536) throw new Error('收到过多非预期数据，请断开后重新连接。');
+        if (this.buffer.length + value.length > 65536) throw new Error('接收数据异常，请重新连接。');
         this.buffer.push(...value); this.wake?.();
       }
     } catch (e) {
@@ -70,14 +70,14 @@ export class SerialLink implements RadioLink {
         if (this.failed) throw this.failed;
         if (this.closed) throw new Error('连接已关闭');
         const remaining = deadline - Date.now();
-        if (remaining <= 0) throw new Error('电台响应超时。请检查电源、插头和写频线，并关闭占用串口的软件。');
+        if (remaining <= 0) throw new Error('电台响应超时');
         await new Promise<void>((resolve, reject) => {
           const finish = (error?: unknown) => {
             clearTimeout(timer); signal?.removeEventListener('abort', abort); this.wake = undefined;
             if (error) reject(error); else resolve();
           };
           const abort = () => finish(signal?.reason ?? new DOMException('已取消', 'AbortError'));
-          const timer = setTimeout(() => finish(new Error('电台响应超时，请重新连接后重试。')), remaining);
+          const timer = setTimeout(() => finish(new Error('电台响应超时')), remaining);
           this.wake = () => finish(); signal?.addEventListener('abort', abort, { once: true });
           if (signal?.aborted) abort();
         });

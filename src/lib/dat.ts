@@ -10,14 +10,14 @@ export { DCS_CODES, CTCSS, encodeTone, decodeTone } from './tone';
 import { encodeTone, decodeTone } from './tone';
 const sameRadioFields = (a: Channel, b: Channel) => ['name', 'rx', 'tx', 'rxTone', 'txTone', 'power', 'bandwidth', 'busy', 'scanAdd', 'pttId', 'signalCode', 'optionalSignal', 'muteMode', 'scramble'].every(k => a[k as keyof Channel] === b[k as keyof Channel]);
 export function parseRows(text: string): number[][] {
-  if (text.length > 2_000_000) throw new Error('DAT 文件超过 2 MB，请确认选择的是 D500 写频文件。');
+  if (text.length > 2_000_000) throw new Error('DAT 文件超过 2 MB');
   const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/).filter(l => l.trim());
   if (lines.length !== 1025) throw new Error(`DAT 有 ${lines.length} 行；当前支持 D500 的 1025 行文本格式，未修改此文件。`);
   return lines.map((line, i) => {
     const parts = line.trim().split(/\s+/);
     if (parts.length !== 19 || parts.some(v => !/^\d+$/.test(v))) throw new Error(`DAT 第 ${i + 1} 行应为 19 个十进制整数字段。`);
     const row = parts.map(Number);
-    if (row[0] !== Math.floor(i / 16) || row[1] !== i % 16 || row[2] !== i) throw new Error(`DAT 第 ${i + 1} 行地址不连续，无法安全解析。`);
+    if (row[0] !== Math.floor(i / 16) || row[1] !== i % 16 || row[2] !== i) throw new Error(`DAT 第 ${i + 1} 行地址不连续`);
     if (row.slice(3).some(n => n > 255)) throw new Error(`DAT 第 ${i + 1} 行包含超出字节范围的数据。`);
     return row;
   });
@@ -49,12 +49,12 @@ export function parseDat(text: string, fileName = 'D500.dat'): { channels: Chann
       const tx = decodeFrequency(p.slice(4, 8));
       let name = '';
       try { name = decodeName(rows[256 + slot].slice(3)); }
-      catch { warnings.push(`信道 ${slotLabel(slot)} 名称不能按 GBK 解码；未编辑时保留原始名称字节。`); }
+      catch { warnings.push(`信道 ${slotLabel(slot)} 名称无法解码，原值已保留`); }
       const power: Power = (['high', 'low'] as const)[p[14] & 3] ?? `raw:${p[14] & 3}`;
       channels.push({ ...newChannel(slot), sourceSlot: slot, name, rx, tx, rxTone: decodeTone(p[8] | p[9] << 8), txTone: decodeTone(p[10] | p[11] << 8), power, bandwidth: p[15] & 64 ? 'narrow' : 'wide', busy: !!(p[15] & 8), scanAdd: !!(p[15] & 4), pttId: p[15] & 3, signalCode: p[12] & 15, optionalSignal: p[13] & 15, muteMode: p[13] >> 4, scramble: !!(p[14] & 16) });
     } catch (e) {
       // Do not silently drop a record and then clear it on export.
-      throw new Error(`信道 ${slotLabel(slot)} 无法解析：${e instanceof Error ? e.message : String(e)}。已停止导入，原文件保持不变。`);
+      throw new Error(`信道 ${slotLabel(slot)} 无法解析：${e instanceof Error ? e.message : String(e)}`);
     }
   }
   return { channels, template: { rows, original: text, originalChannels: structuredClone(channels), fileName }, settings: readSettings(rows), warnings };
@@ -71,7 +71,7 @@ export function validateChannels(channels: Channel[], originalChannels?: Channel
     try {
       const length = encodeName(c.name).length;
       const before = originals.get(c.sourceSlot ?? c.slot);
-      if (length > 8 && before?.name !== c.name) add('name', `名称占 ${length} 字节；已验证的 V1 原厂保存逻辑最多支持 8 字节（常用汉字 4 个），请缩短后导出 DAT`, originalChannels ? 'error' : 'warning');
+      if (length > 8 && before?.name !== c.name) add('name', `名称 ${length} 字节，最多 8 字节（4 个汉字）`, originalChannels ? 'error' : 'warning');
     } catch (e) { add('name', (e as Error).message); }
     for (const f of ['rx', 'tx'] as const) {
       if (f === 'tx' && c.tx === '') continue;
@@ -87,7 +87,7 @@ export function validateChannels(channels: Channel[], originalChannels?: Channel
   return issues;
 }
 export function exportDat(channels: Channel[], template: DatTemplate | null, settings?: RadioSettings): string {
-  if (!template) throw new Error('请先导入本机原厂软件导出的 DAT，作为导出模板。这样可以保留旧版机器的其他设置。');
+  if (!template) throw new Error('缺少 DAT 模板，请先读取电台或导入 DAT。');
   const parsed = parseDat(template.original);
   const issues = validateChannels(channels, parsed.channels).filter(i => i.severity === 'error');
   if (issues.length) throw new Error(`信道 ${slotLabel(issues[0].slot)}：${issues[0].message}`);
