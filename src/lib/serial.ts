@@ -9,6 +9,7 @@ export interface SerialPortLike {
 }
 export interface SerialApi {
   requestPort(): Promise<SerialPortLike>;
+  getPorts?(): Promise<SerialPortLike[]>;
   addEventListener?(type: 'disconnect', listener: (event: Event) => void): void;
   removeEventListener?(type: 'disconnect', listener: (event: Event) => void): void;
 }

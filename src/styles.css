@@ -19,3 +19,4 @@ main{padding:0 22px;min-width:0}.document-bar{min-height:65px;display:flex;align
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
 .tone-error{font-size:10px;color:#b81921;line-height:1.6;flex-basis:100%}.tone-editor.compact:has(.tone-error){flex-wrap:wrap}.settings-error{padding:0 18px}
+.radio-state{display:flex;align-items:center;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-top:12px}.radio-state .text-btn{font-size:11px}.radio-card-title{flex-wrap:wrap}.radio-card-title>select+select{margin-left:0}.radio-caption{font-variant-numeric:tabular-nums}

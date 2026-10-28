@@ -7,7 +7,7 @@ import { decodeTone } from './tone';
 import { settingsFields, MENU_SETTINGS, VFO_SETTINGS } from './settings';
 import { checkAbort, hex, type RadioLink } from './serial';
 
-// Full-table / power-cycle validation is pending; the three-block smoke test passed.
+// Full channel writes passed on hardware; full-settings / power-cycle checks remain.
 export const HARDWARE_WRITE_VERIFIED = false;
 export const HARDWARE_WRITE_SMOKE_TESTED = true;
 export const CONFIG_SIZE = 0x3200;
@@ -23,10 +23,13 @@ export interface RadioSnapshot {
   source?: 'radio-read' | 'write-ack';
   /** Omitted on complete reads; file-only writes establish only these ranges. */
   knownScopes?: ('channels' | 'settings')[];
+  /** Additional individually acknowledged blocks, without claiming a full scope. */
+  knownAddresses?: number[];
 }
 export type Progress = (done: number, total: number, label: string) => void;
 export interface WriteBlock { address: number; before: number[]; after: number[] }
 export interface WritePlan { blocks: WriteBlock[]; channels: number[]; names: number[]; settings: number; changedBytes: number; mode?: 'file' }
+export interface WriteOptions { mode: 'changes' | 'full' }
 const addressText = (address: number) => `0x${address.toString(16).padStart(4, '0').toUpperCase()}`;
 function editableByte(row: number, byte: number) {
   return row >= 0 && row < 200 || row >= 256 && row < 456 || settingsFields(row).some(field => field.includes(byte));
@@ -50,8 +53,9 @@ export function readCommand(address: number, length: 16 | 64) {
   if (![16, 64].includes(length) || !Number.isInteger(address) || address < 0 || address + length > 0x4000 || address % length) throw new Error('读取地址无效');
   return Uint8Array.of(0x53, address >> 8, address & 255, length);
 }
-function validSnapshot(snapshot: RadioSnapshot) {
+export function validSnapshot(snapshot: RadioSnapshot) {
   if (snapshot.schema !== 'd500-radio-read-v1' || snapshot.bytes.length !== CONFIG_SIZE || snapshot.bytes.some(b => !Number.isInteger(b) || b < 0 || b > 255)) throw new Error('读机备份无效');
+  if (snapshot.knownScopes && snapshot.knownScopes.some(s => s !== 'channels' && s !== 'settings') || snapshot.knownAddresses && snapshot.knownAddresses.some(a => !Number.isInteger(a) || a < 0 || a >= CONFIG_SIZE || a % 16)) throw new Error('读写状态范围无效');
 }
 export function snapshotDat(snapshot: RadioSnapshot): string {
   validSnapshot(snapshot);
@@ -94,6 +98,21 @@ const requestedScopes = (scope: WriteScope): ('channels' | 'settings')[] => scop
 export function hasWriteBaseline(snapshot: RadioSnapshot | null, scope: WriteScope): boolean {
   return !!snapshot && requestedScopes(scope).every(s => !snapshot.knownScopes || snapshot.knownScopes.includes(s));
 }
+/** Known device blocks take precedence; all other bytes remain a file reference. */
+export function writeBaseline(snapshot: RadioSnapshot | null, workspace: Workspace): RadioSnapshot {
+  if (!workspace.template) throw new Error('缺少 DAT 模板');
+  const bytes = parseRows(workspace.template.original).slice(0, CONFIG_SIZE / 16).flatMap(r => r.slice(3));
+  if (snapshot) {
+    validSnapshot(snapshot);
+    const addresses = new Set(snapshot.knownAddresses ?? []);
+    for (let address = 0; address < CONFIG_SIZE; address += 16) {
+      const row = address / 16, scope = row < 200 || row >= 256 && row < 456 ? 'channels' : 'settings';
+      if (hasWriteBaseline(snapshot, scope) || addresses.has(address)) bytes.splice(address, 16, ...snapshot.bytes.slice(address, address + 16));
+    }
+  }
+  return { schema: 'd500-radio-read-v1', capturedAt: snapshot?.capturedAt ?? new Date().toISOString(), identity: snapshot?.identity ?? [], bytes, hardwareVerified: false,
+    source: 'write-ack', knownScopes: snapshot?.knownScopes ?? (snapshot ? ['channels', 'settings'] : []), knownAddresses: snapshot?.knownAddresses ?? [] };
+}
 /** Without a device baseline, write the loaded file's allowed ranges as-is. */
 export function planFileWrite(workspace: Workspace, scope: WriteScope): WritePlan {
   const rows = parseRows(exportDat(workspace.channels, workspace.template, workspace.settings));
@@ -109,7 +128,12 @@ export function planFileWrite(workspace: Workspace, scope: WriteScope): WritePla
   }
   return plan;
 }
-export function planWorkspaceWrite(snapshot: RadioSnapshot | null, workspace: Workspace, scope: WriteScope): WritePlan {
+export function planWorkspaceWrite(snapshot: RadioSnapshot | null, workspace: Workspace, scope: WriteScope, options?: WriteOptions): WritePlan {
+  if (options?.mode === 'full') return planFileWrite(workspace, scope);
+  if (options?.mode === 'changes') {
+    const baseline = writeBaseline(snapshot, workspace);
+    return scopePlan(planWrite(baseline, { ...workspace, template: parseDat(snapshotDat(baseline), workspace.template?.fileName).template }), scope);
+  }
   const target = snapshot ? { ...workspace, template: parseDat(snapshotDat(snapshot), workspace.template?.fileName).template } : workspace;
   const parts = requestedScopes(scope).map(part => hasWriteBaseline(snapshot, part)
     ? scopePlan(planWrite(snapshot!, target), part) : planFileWrite(workspace, part));
@@ -203,12 +227,12 @@ export function scopePlan(plan: WritePlan, scope: WriteScope): WritePlan {
 }
 export type SessionFactory = () => Promise<RadioLink & { close(): Promise<void> }>;
 /** Direct file / delta write. No automatic configuration read or readback. */
-export async function programWorkspace(open: SessionFactory, workspace: Workspace, input: { snapshot: RadioSnapshot | null; plan: WritePlan; identity?: number[] | null }, scope: WriteScope, backup: (snapshot: RadioSnapshot) => Promise<void>, progress: Progress, signal?: AbortSignal): Promise<RadioSnapshot> {
+export async function programWorkspace(open: SessionFactory, workspace: Workspace, input: { snapshot: RadioSnapshot | null; plan: WritePlan; identity?: number[] | null; options?: WriteOptions }, scope: WriteScope, backup: (snapshot: RadioSnapshot) => Promise<void>, progress: Progress, signal?: AbortSignal): Promise<RadioSnapshot> {
   const { snapshot: before, plan: reviewed } = input;
   if (before) validSnapshot(before);
   validatePlan(reviewed);
   if (!reviewed.blocks.length) throw new Error('没有需要写入的修改。');
-  const fresh = planWorkspaceWrite(before, workspace, scope);
+  const fresh = planWorkspaceWrite(before, workspace, scope, input.options);
   if (fresh.mode !== reviewed.mode || JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('方案已变化，请重试。');
   // Preserve the last actual read. Acknowledged expected bytes are not a read backup.
   if (before && before.source !== 'write-ack') await backup(before);
@@ -220,11 +244,18 @@ export async function programWorkspace(open: SessionFactory, workspace: Workspac
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}${writingStarted ? ' 写入未完成，请重新读取。' : ''}`);
   } finally { await link.close(); }
-  const expected = before ? [...before.bytes] : parseRows(exportDat(workspace.channels, workspace.template, workspace.settings)).slice(0, CONFIG_SIZE / 16).flatMap(r => r.slice(3));
+  const expected = input.options ? writeBaseline(before, workspace).bytes : before ? [...before.bytes] : parseRows(exportDat(workspace.channels, workspace.template, workspace.settings)).slice(0, CONFIG_SIZE / 16).flatMap(r => r.slice(3));
   for (const block of fresh.blocks) expected.splice(block.address, 16, ...block.after);
   progress(1, 1, '写入完成');
-  const knownScopes = [...new Set([...(before ? before.knownScopes ?? ['channels', 'settings'] as const : []), ...requestedScopes(scope)])];
-  return { schema: 'd500-radio-read-v1', capturedAt: new Date().toISOString(), bytes: expected, identity, source: 'write-ack', hardwareVerified: false, communicationProfile: 'cps-2025', knownScopes };
+  const knownScopes = [...new Set([...(before ? before.knownScopes ?? ['channels', 'settings'] as const : []), ...(input.options?.mode === 'changes' ? [] : requestedScopes(scope))])];
+  const knownAddresses = [...new Set([...(before?.knownAddresses ?? []), ...fresh.blocks.map(b => b.address)])].sort((a,b) => a-b);
+  return { schema: 'd500-radio-read-v1', capturedAt: new Date().toISOString(), bytes: expected, identity, source: 'write-ack', hardwareVerified: false, communicationProfile: 'cps-2025', knownScopes, knownAddresses };
+}
+
+export function writeEstimate(blocks: number): string {
+  if (!blocks) return '无修改';
+  const seconds = Math.ceil(4 + blocks * 0.7);
+  return seconds < 60 ? `约 ${seconds} 秒` : `约 ${Math.ceil(seconds / 60)} 分钟`;
 }
 
 export interface WriteChange { target: string; field: string; before: string; after: string }

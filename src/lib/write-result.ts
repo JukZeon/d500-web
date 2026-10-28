@@ -1,19 +1,19 @@
 import type { Workspace } from './model';
-import { exportDat, parseDat } from './dat';
-import { hasWriteBaseline, snapshotDat, type RadioSnapshot, type WriteScope } from './radio';
+import { exportDat, parseDat, parseRows } from './dat';
+import { type RadioSnapshot, type WriteScope } from './radio';
 
 /** Rebase on acknowledged writes, retaining pending edits from the other scope. */
-export function acceptWriteResult(workspace: Workspace, snapshot: RadioSnapshot, scope: WriteScope): Workspace {
-  const actual = parseDat(snapshotDat(snapshot), workspace.template?.fileName);
-  const channels = workspace.channels.map(c => scope === 'settings' && hasWriteBaseline(snapshot, 'channels') ? c : { ...c, sourceSlot: c.slot });
-  const pending = parseDat(exportDat(channels, actual.template, workspace.settings));
-  const local = new Map(workspace.channels.map(c => [c.slot, c]));
+export function acceptWriteResult(workspace: Workspace, snapshot: RadioSnapshot, _scope: WriteScope): Workspace {
+  if (!workspace.template) throw new Error('缺少 DAT 模板');
+  const rows = parseRows(workspace.template.original);
+  const desired = parseRows(exportDat(workspace.channels, workspace.template, workspace.settings));
+  for (let row = 0; row < snapshot.bytes.length / 16; row++) rows[row].splice(3, 16, ...snapshot.bytes.slice(row * 16, row * 16 + 16));
+  const actual = parseDat(rows.map(r => r.join(' ')).join('\r\n') + '\r\n', workspace.template.fileName);
   return {
-    ...workspace, template: actual.template, settings: pending.settings,
-    channels: pending.channels.map(c => {
-      const previous = local.get(c.slot);
-      return { ...c, group: previous?.group ?? '', note: previous?.note ?? '',
-        ...(scope === 'settings' && hasWriteBaseline(snapshot, 'channels') ? previous?.sourceSlot === undefined ? {} : { sourceSlot: previous.sourceSlot } : { sourceSlot: c.slot }) };
+    ...workspace, template: actual.template,
+    channels: workspace.channels.map(c => {
+      const applied = [c.slot, 256 + c.slot].every(row => rows[row].slice(3).every((v,i) => v === desired[row][i+3]));
+      return applied ? { ...c, sourceSlot: c.slot } : c;
     }),
     updatedAt: new Date().toISOString(),
   };

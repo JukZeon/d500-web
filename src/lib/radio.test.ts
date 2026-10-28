@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { parseDat, exportDat, parseRows } from './dat';
 import { emptyWorkspace, newChannel } from './model';
-import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HARDWARE_WRITE_SMOKE_TESTED, HELLO, hasWriteBaseline, planFileWrite, planWorkspaceWrite, planWrite, programWorkspace, type WritePlan, readCommand, snapshotDat, type RadioSnapshot } from './radio';
+import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HARDWARE_WRITE_SMOKE_TESTED, HELLO, hasWriteBaseline, planFileWrite, planWorkspaceWrite, planWrite, programWorkspace, type WritePlan, readCommand, snapshotDat, writeEstimate, type RadioSnapshot } from './radio';
 import { checkAbort, SerialLink, type RadioLink, type SerialPortLike } from './serial';
 import { saveRadioBackup } from './radio-backups';
 import { acceptWriteResult } from './write-result';
@@ -235,6 +235,46 @@ describe('captured D500 protocol with synthetic device memory', () => {
     const loaded = parseDat(exportDat([{...workspace.channels[0],name:'FILE'}],workspace.template,workspace.settings));
     const target = {...workspace,...loaded};
     expect(planWorkspaceWrite(snapshot,target,'channels').blocks.map(b=>b.address)).toEqual([0x1000]);
+  });
+  it('writes a one-name edit from a loaded file in one block, without reading or rewriting unknown settings', async () => {
+    const { workspace, snapshot } = setup(), io = new RadioSimulator([...snapshot.bytes]);
+    workspace.channels[0].name = 'EDIT'; io.memory[0x0e00] = 42;
+    const options = { mode: 'changes' as const }, plan = planWorkspaceWrite(null,workspace,'all',options);
+    expect(plan.blocks.map(b=>b.address)).toEqual([0x1000]);
+    const result = await programWorkspace(async()=>({write:io.write.bind(io),read:io.read.bind(io),async close(){}}),workspace,{snapshot:null,plan,options},'all',async()=>{throw new Error('No read backup');},()=>{});
+    expect(io.writes()).toHaveLength(1);
+    expect(io.sent.filter(p=>p[0]===0x53)).toEqual([[0x53,0x3d,0xf0,16]]);
+    expect(io.memory[0x0e00]).toBe(42);
+    expect(result.knownScopes).toEqual([]); expect(result.knownAddresses).toEqual([0x1000]);
+    const next=acceptWriteResult(workspace,result,'all');
+    expect(planWorkspaceWrite(result,next,'all',options).blocks).toHaveLength(0);
+    next.channels[0].name='';
+    expect(planWorkspaceWrite(result,next,'all',options).blocks.map(b=>b.address)).toEqual([0x1000]);
+  });
+  it('keeps a pending setting after a channel-only edit from a file, including after serializing its state', async () => {
+    const {workspace,snapshot}=setup(),io=new RadioSimulator([...snapshot.bytes]),options={mode:'changes' as const};
+    workspace.channels[0].name='EDIT';workspace.settings!.text={boot:'TEST'};
+    const plan=planWorkspaceWrite(null,workspace,'channels',options);
+    const result=await programWorkspace(async()=>({write:io.write.bind(io),read:io.read.bind(io),async close(){}}),workspace,{snapshot:null,plan,options},'channels',async()=>{},()=>{});
+    const restored:RadioSnapshot=JSON.parse(JSON.stringify(result)), next=acceptWriteResult(workspace,restored,'channels');
+    expect(planWorkspaceWrite(restored,next,'channels',options).blocks).toHaveLength(0);
+    expect(planWorkspaceWrite(restored,next,'all',options).blocks.map(b=>b.address)).toEqual([251*16]);
+    expect(next.settings!.text!.boot).toBe('TEST');
+  });
+  it('does not promote partially known ranges to full coverage or rewrite untouched imported settings', () => {
+    const {workspace,snapshot}=setup();
+    workspace.channels[0].name='EDIT';
+    const partial={...snapshot,source:'write-ack' as const,knownScopes:['channels' as const]};
+    expect(planWorkspaceWrite(partial,workspace,'all',{mode:'changes'}).blocks.map(b=>b.address)).toEqual([0x1000]);
+    expect(planWorkspaceWrite(partial,workspace,'all',{mode:'full'}).blocks).toHaveLength(413);
+    expect(planWorkspaceWrite(null,{...workspace,channels:parseDat(workspace.template!.original).channels},'all',{mode:'changes'}).blocks).toHaveLength(0);
+  });
+  it('rejects a different write mode before opening a serial session and reports bounded estimates', async () => {
+    const {workspace,snapshot}=setup(),open=vi.fn();workspace.channels[0].name='EDIT';
+    const plan=planWorkspaceWrite(snapshot,workspace,'channels',{mode:'changes'});
+    await expect(programWorkspace(open,workspace,{snapshot,plan,options:{mode:'full'}},'channels',async()=>{},()=>{})).rejects.toThrow('方案已变化');
+    expect(open).not.toHaveBeenCalled();
+    expect(writeEstimate(0)).toBe('无修改');expect(writeEstimate(1)).toBe('约 5 秒');expect(writeEstimate(400)).toBe('约 5 分钟');
   });
   it('does not send any file data when the connected device identity changes', async () => {
     const { snapshot, workspace } = setup(), io = new RadioSimulator([...snapshot.bytes]);

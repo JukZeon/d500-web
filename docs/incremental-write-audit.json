@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-28",
+  "version": "0.4.0-beta.8",
+  "scope": "One old D500 without aviation reception; Chrome on localhost production build",
+  "tests": [
+    {
+      "step": "edit",
+      "writeBlocks": 1,
+      "address": "0x1010",
+      "deviceAck": true,
+      "passwordStatusReads": 1,
+      "configurationReads": 0,
+      "settingsWrites": 0,
+      "elapsedSeconds": 4.82,
+      "captureSha256": "cbc18b45c2607795ee0abbb3778a5034cf193aea2bef4752f9e58de7ea084c3d"
+    },
+    {
+      "step": "restore-after-refresh",
+      "writeBlocks": 1,
+      "address": "0x1010",
+      "deviceAck": true,
+      "passwordStatusReads": 1,
+      "configurationReads": 0,
+      "settingsWrites": 0,
+      "elapsedSeconds": 4.822,
+      "captureSha256": "e15b41bc8362f434b6a0b57b6c8577a10736862e8613baee789118c4b3213e19"
+    }
+  ],
+  "pageReloadBetweenWrites": true,
+  "cachedWriteStateRestored": true,
+  "writeScopeRestored": true,
+  "originalNameRestoredWithDeviceAck": true,
+  "noChangesButtonDisabled": true,
+  "readbackPerformed": false,
+  "limits": "Device ACK confirms receipt; neither operation read back channel data. USB VID/PID and CPS identity are not unique radio serial numbers."
+}

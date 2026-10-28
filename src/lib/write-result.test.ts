@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { exportDat, parseDat, parseRows } from './dat';
 import { emptyWorkspace, newChannel, type Workspace } from './model';
-import { CONFIG_SIZE, planFileWrite, planWrite, scopePlan, type RadioSnapshot, type WriteScope } from './radio';
+import { CONFIG_SIZE, planFileWrite, planWorkspaceWrite, planWrite, scopePlan, type RadioSnapshot, type WriteScope } from './radio';
 import { acceptWriteResult } from './write-result';
 
 function setup() {
@@ -65,5 +65,23 @@ describe('acknowledged write baseline', () => {
     const next = acceptWriteResult(target,after,'channels');
     expect(next.settings!.text!.boot).toBe('FILE');
     expect(planWrite(after,next).blocks.map(b=>b.address)).toEqual([251*16]);
+  });
+  it('does not absorb a pending channel move when only a setting was acknowledged', () => {
+    const {workspace,snapshot}=setup();
+    workspace.channels[0]={...workspace.channels[0],slot:4,sourceSlot:0,name:'MOVE'};
+    workspace.settings!.text={boot:'TEST'};
+    const options={mode:'changes' as const},plan=planWorkspaceWrite(null,workspace,'settings',options);
+    const after={...snapshot,source:'write-ack' as const,knownScopes:[],knownAddresses:plan.blocks.map(b=>b.address),bytes:[...snapshot.bytes]};
+    for(const block of plan.blocks)after.bytes.splice(block.address,16,...block.after);
+    const next=acceptWriteResult(workspace,after,'settings');
+    expect(next.channels[0].sourceSlot).toBe(0);
+    expect(planWorkspaceWrite(after,next,'settings',options).blocks).toHaveLength(0);
+    expect(planWorkspaceWrite(after,next,'channels',options).blocks.map(b=>b.address)).toEqual([0,64,4096,4160]);
+  });
+  it('preserves file data outside the radio read range when rebasing a write', () => {
+    const {workspace,snapshot}=setup(),rows=parseRows(workspace.template!.original);
+    rows[900][8]=42;workspace.template=parseDat(rows.map(r=>r.join(' ')).join('\n')).template;
+    const next=acceptWriteResult(workspace,{...snapshot,source:'write-ack'},'channels');
+    expect(parseRows(exportDat(next.channels,next.template,next.settings))[900][8]).toBe(42);
   });
 });
