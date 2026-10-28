@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-28",
+  "version": "0.4.0-beta.6",
+  "scope": "One old D500 without aviation reception; production HTTPS Workbench in Chrome",
+  "channels": 147,
+  "renamedChannels": 66,
+  "writeScope": "channels",
+  "writeBlocks": 400,
+  "channelParameterBlocks": 200,
+  "nameBlocks": 200,
+  "allPayloadsMatchValidatedDat": true,
+  "allWritesAcknowledged": true,
+  "sessions": 1,
+  "passwordStatusReads": 1,
+  "channelConfigurationReads": 0,
+  "settingsWrites": 0,
+  "postWriteReadback": false,
+  "uiCompletionObserved": true,
+  "captureSha256": "63c23427a03e05ea5e6fd03d474bf6391f74ba17aea996551f609cfc36ae30e3",
+  "datSha256": "a57e559525438c3b80222e681f1dafc2b677de5e203820b0230a3c3a3c641cb7",
+  "limits": "Device ACK confirms receipt. No post-write readback, factory CPS cross-check, physical power-cycle or full-settings validation was performed in this run."
+}

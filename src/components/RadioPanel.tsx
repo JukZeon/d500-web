@@ -106,7 +106,7 @@ export default function RadioPanel({ visible, workspace, onRead, onWritten, onCo
   const changes = snapshot && preview && preview.mode !== 'file' ? describeWrite(snapshot, preview) : [];
   const fileMode = !hasWriteBaseline(snapshot, scope);
   return <section className="radio-page" hidden={!visible}>
-    <div className="radio-intro"><h2>电台读写</h2><span className="verification-note">整表写入待实测</span></div>
+    <div className="radio-intro"><h2>电台读写</h2><span className="verification-note">信道读写已实测</span></div>
     <div className="radio-operation"><div className="radio-card-title"><Cable size={20} /><h3>连接</h3></div>
       {!supported && <div className="inline-error">浏览器不支持串口，请使用 Chrome / Edge。</div>}
       <div className="radio-actions"><button className="btn primary" disabled={!supported || working || !!identity} onClick={() => void connect()}><Cable size={16} />{identity ? '已连接' : '连接电台'}</button><button className="btn" disabled={!supported || working} onClick={() => void read()}><Download size={16} />读取电台</button>{port.current && <button className="btn" disabled={working} onClick={() => void connect(true)}>更换写频线</button>}{working && <button className="btn" onClick={() => abort.current?.abort()}><X size={16} />停止</button>}</div>
