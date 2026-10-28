@@ -138,10 +138,18 @@ describe('DAT integrity', () => {
     expect(restored.channels[0]).toEqual(channels[0]);
     expect(exportDat(restored.channels, restored.template, restored.settings)).toBe(template.original);
   });
-  it('enforces the verified V1 8-byte edit limit without truncating imported long names', () => {
+  it('exports the hardware-tested 5-8 Han characters and 16 ASCII bytes without truncation', () => {
     const { channels, template } = parseDat(fixture());
-    channels[0].name = '一二三四五';
-    expect(() => exportDat(channels, template)).toThrow('8 字节');
+    for (const name of ['一二三四五','一二三四五六','一二三四五六七','一二三四五六七八','1234567890ABCDEF']) {
+      channels[0].name = name;
+      const out = exportDat(channels, template);
+      expect(parseDat(out).channels[0].name).toBe(name);
+      expect(parseRows(out)[0]).toEqual(template.rows[0]);
+    }
+    for (const name of ['一二三四五六七八九','1234567890ABCDEFG','一二三四五六七八A']) {
+      channels[0].name = name;
+      expect(() => exportDat(channels, template)).toThrow('16');
+    }
     const rows = parseRows(fixture()); rows[256].splice(3, 16, ...encodeName('一二三四五六七八'));
     const text = rows.map(r => r.join(' ')).join('\n'), long = parseDat(text);
     expect(exportDat(long.channels, long.template)).toBe(text);

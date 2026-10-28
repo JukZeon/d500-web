@@ -1,0 +1,57 @@
+{
+  "date": "2026-10-28",
+  "version": "0.4.0-beta.6",
+  "scope": "One old D500 without aviation reception",
+  "storageBytes": 16,
+  "samples": [
+    {
+      "slot": 1,
+      "name": "一二三四五",
+      "gbkBytes": 10,
+      "readbackMatches": true,
+      "channelParametersUnchanged": true
+    },
+    {
+      "slot": 2,
+      "name": "一二三四五六",
+      "gbkBytes": 12,
+      "readbackMatches": true,
+      "channelParametersUnchanged": true
+    },
+    {
+      "slot": 3,
+      "name": "一二三四五六七",
+      "gbkBytes": 14,
+      "readbackMatches": true,
+      "channelParametersUnchanged": true
+    },
+    {
+      "slot": 4,
+      "name": "一二三四五六七八",
+      "gbkBytes": 16,
+      "readbackMatches": true,
+      "channelParametersUnchanged": true
+    },
+    {
+      "slot": 5,
+      "name": "1234567890ABCDEF",
+      "gbkBytes": 16,
+      "readbackMatches": true,
+      "channelParametersUnchanged": true
+    }
+  ],
+  "display": {
+    "source": "Operator observation on the physical radio",
+    "hanCharactersVisible": 6,
+    "asciiCharactersVisible": 8,
+    "overSixHanCharactersShows": ".",
+    "mixedCharacterWidthsVerified": false
+  },
+  "restoration": {
+    "namesRestored": 5,
+    "allNamesReadBackMatchOriginal": true,
+    "allTestedChannelParametersUnchanged": true
+  },
+  "applyCaptureSha256": "2629a0522018921151448da803f3bf5020479382b5c5b73fd9ae7e5dbcbc7b66",
+  "restoreCaptureSha256": "daba3568b3fe6f16f795180a00da9cd44f8e9dcc2637c5aaa7f97e5e2ae5e764"
+}

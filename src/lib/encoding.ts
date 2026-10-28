@@ -1,4 +1,5 @@
 let reverseGbk: Map<string, number[]> | undefined;
+export const MAX_NAME_BYTES = 16;
 const decoder = new TextDecoder('gbk', { fatal: true });
 export function decodeName(bytes: number[]): string {
   const end = bytes.findIndex(v => v === 255 || v === 0);
@@ -23,6 +24,6 @@ export function encodeName(text: string): number[] {
     if (!bytes || char === '\0' || /[\r\n\t]/.test(char)) throw new Error(`名称包含电台不支持的字符“${char}”`);
     out.push(...bytes);
   }
-  if (out.length > 16) throw new Error(`名称占 ${out.length} 字节，超出 DAT 名称区的 16 字节容量`);
+  if (out.length > MAX_NAME_BYTES) throw new Error(`名称占 ${out.length} 字节，最多 ${MAX_NAME_BYTES} 字节`);
   return out;
 }

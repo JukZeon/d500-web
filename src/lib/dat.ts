@@ -59,20 +59,15 @@ export function parseDat(text: string, fileName = 'D500.dat'): { channels: Chann
   }
   return { channels, template: { rows, original: text, originalChannels: structuredClone(channels), fileName }, settings: readSettings(rows), warnings };
 }
-export function validateChannels(channels: Channel[], originalChannels?: Channel[]): Issue[] {
+export function validateChannels(channels: Channel[], _originalChannels?: Channel[]): Issue[] {
   const issues: Issue[] = [];
-  const originals = new Map((originalChannels ?? []).map(c => [c.slot, c]));
   const slots = new Set<number>();
   for (const c of channels) {
     const add = (field: string, message: string, severity: 'error' | 'warning' = 'error') => issues.push({ slot: c.slot, field, message, severity });
     if (!Number.isInteger(c.slot) || c.slot < 0 || c.slot > 199) add('slot', '信道编号必须在 000–199 之间');
     if (slots.has(c.slot)) add('slot', '信道编号重复');
     slots.add(c.slot);
-    try {
-      const length = encodeName(c.name).length;
-      const before = originals.get(c.sourceSlot ?? c.slot);
-      if (length > 8 && before?.name !== c.name) add('name', `名称 ${length} 字节，最多 8 字节（4 个汉字）`, originalChannels ? 'error' : 'warning');
-    } catch (e) { add('name', (e as Error).message); }
+    try { encodeName(c.name); } catch (e) { add('name', (e as Error).message); }
     for (const f of ['rx', 'tx'] as const) {
       if (f === 'tx' && c.tx === '') continue;
       try { encodeFrequency(c[f]); } catch (e) { add(f, (e as Error).message); }
