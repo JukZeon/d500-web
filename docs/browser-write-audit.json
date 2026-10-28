@@ -1,0 +1,61 @@
+{
+  "date": "2026-10-28",
+  "version": "0.4.0-beta.3",
+  "captureSha256": "e8704df9bc9dd65f035d535f5cfbdde53e2e9f15d8c4c87660689c507b71f2ce",
+  "baselineSha256": "a85e937fad07b696f9f36a20b9dd1f66f287b1ce48f46db114e3b88dbf068cfe",
+  "afterSha256": "849a185dcc39231a4a7b0d950fe98410ddb40dfb0073f2aa8ef295317160eebe",
+  "configurationBytes": 12800,
+  "sessions": [
+    {
+      "session": 0,
+      "readBlocks": 200,
+      "writeBlocks": 0,
+      "allReadPayloadsExpected": true,
+      "allWrittenPayloadsExpected": true,
+      "allWritesAcknowledged": true
+    },
+    {
+      "session": 1,
+      "readBlocks": 200,
+      "writeBlocks": 0,
+      "allReadPayloadsExpected": true,
+      "allWrittenPayloadsExpected": true,
+      "allWritesAcknowledged": true
+    },
+    {
+      "session": 2,
+      "readBlocks": 0,
+      "writeBlocks": 3,
+      "allReadPayloadsExpected": true,
+      "allWrittenPayloadsExpected": true,
+      "allWritesAcknowledged": true
+    },
+    {
+      "session": 3,
+      "readBlocks": 200,
+      "writeBlocks": 0,
+      "allReadPayloadsExpected": true,
+      "allWrittenPayloadsExpected": true,
+      "allWritesAcknowledged": true
+    }
+  ],
+  "changedBlockAddresses": [
+    16,
+    4016,
+    4112
+  ],
+  "changedByteCount": 3,
+  "verification": "Complete readback equals the expected image; channel scan flag, channel name and boot text only.",
+  "restoration": {
+    "restored": true,
+    "writeBlocks": 3,
+    "addresses": [
+      16,
+      4016,
+      4112
+    ],
+    "baselineSha256": "a85e937fad07b696f9f36a20b9dd1f66f287b1ce48f46db114e3b88dbf068cfe",
+    "allWrittenBlocksReadBackMatchBaseline": true
+  },
+  "limits": "One old D500 without aviation reception; no full-table or physical power-cycle validation."
+}

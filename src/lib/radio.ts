@@ -7,7 +7,9 @@ import { decodeTone } from './tone';
 import { settingsFields, MENU_SETTINGS, VFO_SETTINGS } from './settings';
 import { checkAbort, hex, type RadioLink } from './serial';
 
+// Full-table / power-cycle validation is pending; the three-block smoke test passed.
 export const HARDWARE_WRITE_VERIFIED = false;
+export const HARDWARE_WRITE_SMOKE_TESTED = true;
 export const CONFIG_SIZE = 0x3200;
 export const HELLO = Uint8Array.of(0x55, 0x20, 0x25, 0x07, 0x06, 0xff, 0xdc, 0x02);
 export interface RadioSnapshot {
@@ -174,14 +176,17 @@ export async function programWorkspace(open: SessionFactory, workspace: Workspac
   validatePlan(reviewed);
   if (!reviewed.blocks.length) throw new Error('没有需要写入的修改。');
   async function read(label: string) {
+    progress(0, 1, label);
     const link = await open();
     try { return await new D500Protocol(link).readImage((done, total) => progress(done, total, label), signal); }
+    catch (error) { checkAbort(signal); throw new Error(`${label}失败：${error instanceof Error ? error.message : String(error)}`); }
     finally { await link.close(); }
   }
   const before = await read('写前检查');
   const fresh = scopePlan(planWrite(before, workspace), scope);
   if (JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('电台数据已变化，请重新读取。');
   await backup(before); checkAbort(signal);
+  progress(0, 1, '连接写入会话');
   const link = await open(); let writingStarted = false;
   try {
     writingStarted = true;

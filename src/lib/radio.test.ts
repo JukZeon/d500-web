@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseDat, exportDat, parseRows } from './dat';
 import { emptyWorkspace, newChannel } from './model';
-import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HELLO, planWrite, programWorkspace, type WritePlan, readCommand, snapshotDat, type RadioSnapshot } from './radio';
+import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HARDWARE_WRITE_SMOKE_TESTED, HELLO, planWrite, programWorkspace, type WritePlan, readCommand, snapshotDat, type RadioSnapshot } from './radio';
 import { checkAbort, SerialLink, type RadioLink, type SerialPortLike } from './serial';
 
 function setup() {
@@ -41,7 +41,7 @@ async function candidate(io: RadioSimulator, workspace: ReturnType<typeof setup>
 }
 
 describe('captured D500 protocol with synthetic device memory', () => {
-  it('accurately marks browser write hardware verification as pending', () => { expect(HARDWARE_WRITE_VERIFIED).toBe(false); });
+  it('distinguishes the passed hardware smoke test from pending full-table verification', () => { expect(HARDWARE_WRITE_VERIFIED).toBe(false); expect(HARDWARE_WRITE_SMOKE_TESTED).toBe(true); });
   it('encodes bounded read commands and refuses unaligned or out-of-range addresses', () => {
     expect([...readCommand(0x3df0, 16)]).toEqual([0x53, 0x3d, 0xf0, 16]);
     expect(() => readCommand(1, 64)).toThrow(); expect(() => readCommand(0x4000, 64)).toThrow();
@@ -80,6 +80,12 @@ describe('captured D500 protocol with synthetic device memory', () => {
   it('reports the failing handshake stage', async () => {
     const link: RadioLink = { async write() {}, async read() { throw new Error('响应超时'); } };
     await expect(new D500Protocol(link).identify()).rejects.toThrow('握手失败');
+  });
+  it('stops on boot output during an active handshake without sending a second HELLO or writing data', async () => {
+    const sent: number[][] = [];
+    const link: RadioLink = { async write(bytes) { sent.push([...bytes]); }, async read() { return Uint8Array.of(0x55); } };
+    await expect(new D500Protocol(link).identify()).rejects.toThrow('55');
+    expect(sent).toEqual([[...HELLO]]);
   });
   it('cancellation sends no further packets', async () => {
     const { snapshot } = setup(), io = new RadioSimulator([...snapshot.bytes]), abort = new AbortController(); abort.abort();
@@ -195,6 +201,56 @@ describe('Web Serial transport', () => {
       async open() {}, async close() {}, getInfo() { return {}; } };
     return { device, output, input };
   }
+  it('drains stale identity tails and reboot output before HELLO, retaining all later bytes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { device, output, input } = port(), messages: string[] = [];
+      input.enqueue(Uint8Array.of(1, 0, 8, 0x55));
+      let ready = false;
+      const opening = SerialLink.open(device, e => messages.push(e.hex)).then(link => { ready = true; return link; });
+      await vi.advanceTimersByTimeAsync(300);
+      const boot = new TextEncoder().encode('Uart functional API interrupt example\r\n'); input.enqueue(boot);
+      await vi.advanceTimersByTimeAsync(225);
+      expect(ready).toBe(false); expect(output).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(25);
+      const link = await opening;
+      expect(messages).toContain(`连接就绪 · 已清理 ${4 + boot.length} 字节`);
+      input.enqueue(Uint8Array.of(0x55, 6));
+      expect([...await link.read(2)]).toEqual([0x55, 6]);
+      const closing = link.close(); await vi.advanceTimersByTimeAsync(2500); await closing;
+    } finally { vi.useRealTimers(); }
+  });
+  it('honors cancellation during startup and completes the DTR-low exit interval before closing', async () => {
+    vi.useFakeTimers();
+    try {
+      const { device, output } = port(), controller = new AbortController(), signals: unknown[] = [];
+      let closedAt = -1;
+      device.setSignals = async value => { signals.push(value); };
+      device.close = async () => { closedAt = Date.now(); };
+      const startedAt = Date.now();
+      const outcome = SerialLink.open(device, () => {}, 5000, undefined, controller.signal).catch(e => e);
+      await vi.advanceTimersByTimeAsync(100); controller.abort();
+      await vi.advanceTimersByTimeAsync(25);
+      expect(closedAt).toBe(-1);
+      expect(signals.at(-1)).toEqual({ dataTerminalReady: false, requestToSend: false, break: false });
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(await outcome).toBeInstanceOf(DOMException); expect(output).toHaveLength(0);
+      expect(closedAt - startedAt).toBeGreaterThanOrEqual(2600);
+      expect(device.readable?.locked).toBe(false); expect(device.writable?.locked).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+  it('refuses a port with continuous startup noise rather than discarding data indefinitely', async () => {
+    vi.useFakeTimers();
+    const { device, input, output } = port();
+    const noise = setInterval(() => input.enqueue(Uint8Array.of(0x55)), 100);
+    try {
+      const outcome = SerialLink.open(device, () => {}).catch(e => e);
+      await vi.advanceTimersByTimeAsync(3000); clearInterval(noise);
+      await vi.advanceTimersByTimeAsync(2500);
+      expect((await outcome).message).toBe('串口接收未稳定'); expect(output).toHaveLength(0);
+      expect(device.readable?.locked).toBe(false); expect(device.writable?.locked).toBe(false);
+    } finally { clearInterval(noise); vi.useRealTimers(); }
+  });
   it('assembles fragmented responses and keeps surplus bytes for the next read', async () => {
     const { device, input } = port(), link = await SerialLink.open(device, () => {}, 100);
     const reading = link.read(4); input.enqueue(Uint8Array.of(1)); input.enqueue(Uint8Array.of(2, 3, 4, 5));
@@ -209,7 +265,7 @@ describe('Web Serial transport', () => {
     expect(device.readable?.locked).toBe(false); expect(device.writable?.locked).toBe(false);
     const disconnected = port(), other = await SerialLink.open(disconnected.device, () => {});
     disconnected.input.close(); await expect(other.read(1)).rejects.toThrow('断开'); await other.close();
-  });
+  }, 10000);
   it('writes bytes in order, rejects concurrent readers, and honors pre-cancelled sends', async () => {
     const { device, output, input } = port(), link = await SerialLink.open(device, () => {});
     const sending = link.write(Uint8Array.of(0x53, 0, 0, 64));

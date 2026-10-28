@@ -29,18 +29,39 @@ export class SerialLink implements RadioLink {
   private closed = false;
   private consuming = false;
   private sending = false;
+  private preparing = true;
+  private lastReceivedAt = Date.now();
+  private startupBytes = 0;
   private pumping: Promise<void>;
   private constructor(private port: SerialPortLike, private trace: (entry: TraceEntry) => void, private timeout: number, private disconnected?: (error: Error) => void) {
     this.reader = port.readable!.getReader(); this.writer = port.writable!.getWriter();
     this.pumping = this.pump();
   }
-  static async open(port: SerialPortLike, trace: (entry: TraceEntry) => void, timeout = 5000, disconnected?: (error: Error) => void) {
+  static async open(port: SerialPortLike, trace: (entry: TraceEntry) => void, timeout = 5000, disconnected?: (error: Error) => void, signal?: AbortSignal) {
+    checkAbort(signal);
     await port.open({ baudRate: 9600, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none' });
     if (!port.readable || !port.writable) { await port.close(); throw new Error('写频线没有可用的数据通道。'); }
     try { await port.setSignals?.({ dataTerminalReady: true, requestToSend: false, break: false }); }
     catch (error) { await port.close(); throw error; }
     trace({ at: new Date().toISOString(), direction: 'INFO', hex: '9600 8N1 · DTR=1 RTS=0 · 字节间隔 32 ms' });
-    return new SerialLink(port, trace, timeout, disconnected);
+    const link = new SerialLink(port, trace, timeout, disconnected);
+    try { await link.prepare(signal); return link; }
+    catch (error) { await link.close(); throw error; }
+  }
+  private async prepare(signal?: AbortSignal) {
+    const openedAt = Date.now();
+    // CPS purges RX before HELLO. Web Serial has no PurgeComm, so drain only
+    // before the first request, including buffered identity tails / reboot text.
+    while (true) {
+      checkAbort(signal);
+      if (this.failed) throw this.failed;
+      const now = Date.now();
+      if (now - openedAt >= 500 && now - this.lastReceivedAt >= 250) break;
+      if (now - openedAt >= 3000) throw new Error('串口接收未稳定');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    this.preparing = false;
+    this.trace({ at: new Date().toISOString(), direction: 'INFO', hex: `连接就绪 · 已清理 ${this.startupBytes} 字节` });
   }
   private async pump() {
     try {
@@ -49,6 +70,8 @@ export class SerialLink implements RadioLink {
         if (done) { if (!this.closed) throw new Error('写频线已断开，请重新连接。'); break; }
         if (!value?.length) continue;
         this.trace({ at: new Date().toISOString(), direction: 'RX', hex: hex(value) });
+        this.lastReceivedAt = Date.now();
+        if (this.preparing) { this.startupBytes += value.length; continue; }
         if (this.buffer.length + value.length > 65536) throw new Error('接收数据异常，请重新连接。');
         this.buffer.push(...value); this.wake?.();
       }
@@ -109,6 +132,13 @@ export class SerialLink implements RadioLink {
     await this.pumping;
     this.reader.releaseLock(); this.writer.releaseLock();
     try { await this.port.setSignals?.({ dataTerminalReady: false, requestToSend: false, break: false }); }
-    finally { await this.port.close(); }
+    finally {
+      // On the tested Mac, a 500 ms exit interval reproducibly yields 55 + boot
+      // text at the next HELLO. A 2500 ms interval passed consecutive sessions.
+      // Keep the port unavailable until the radio has left the prior session.
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      await this.port.close();
+      this.trace({ at: new Date().toISOString(), direction: 'INFO', hex: '会话已关闭' });
+    }
   }
 }
