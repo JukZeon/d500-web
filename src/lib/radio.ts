@@ -21,10 +21,12 @@ export interface RadioSnapshot {
   communicationProfile?: 'cps-2025';
   /** ACK-only state is used for the next delta; it is never saved as a read backup. */
   source?: 'radio-read' | 'write-ack';
+  /** Omitted on complete reads; file-only writes establish only these ranges. */
+  knownScopes?: ('channels' | 'settings')[];
 }
 export type Progress = (done: number, total: number, label: string) => void;
 export interface WriteBlock { address: number; before: number[]; after: number[] }
-export interface WritePlan { blocks: WriteBlock[]; channels: number[]; names: number[]; settings: number; changedBytes: number }
+export interface WritePlan { blocks: WriteBlock[]; channels: number[]; names: number[]; settings: number; changedBytes: number; mode?: 'file' }
 const addressText = (address: number) => `0x${address.toString(16).padStart(4, '0').toUpperCase()}`;
 function editableByte(row: number, byte: number) {
   return row >= 0 && row < 200 || row >= 256 && row < 456 || settingsFields(row).some(field => field.includes(byte));
@@ -88,6 +90,33 @@ export function planWrite(snapshot: RadioSnapshot, workspace: Workspace): WriteP
   return plan;
 }
 
+const requestedScopes = (scope: WriteScope): ('channels' | 'settings')[] => scope === 'all' ? ['channels', 'settings'] : [scope];
+export function hasWriteBaseline(snapshot: RadioSnapshot | null, scope: WriteScope): boolean {
+  return !!snapshot && requestedScopes(scope).every(s => !snapshot.knownScopes || snapshot.knownScopes.includes(s));
+}
+/** Without a device baseline, write the loaded file's allowed ranges as-is. */
+export function planFileWrite(workspace: Workspace, scope: WriteScope): WritePlan {
+  const rows = parseRows(exportDat(workspace.channels, workspace.template, workspace.settings));
+  const plan: WritePlan = { blocks: [], channels: [], names: [], settings: 0, changedBytes: 0, mode: 'file' };
+  for (let row = 0; row < CONFIG_SIZE / 16; row++) {
+    const channel = row < 200, name = row >= 256 && row < 456, settings = settingsFields(row).length > 0;
+    if (!(channel || name || settings) || scope === 'channels' && settings || scope === 'settings' && !settings) continue;
+    const data = rows[row].slice(3);
+    plan.blocks.push({ address: row * 16, before: [...data], after: [...data] });
+    if (channel) plan.channels.push(row);
+    else if (name) plan.names.push(row - 256);
+    else plan.settings++;
+  }
+  return plan;
+}
+export function planWorkspaceWrite(snapshot: RadioSnapshot | null, workspace: Workspace, scope: WriteScope): WritePlan {
+  const target = snapshot ? { ...workspace, template: parseDat(snapshotDat(snapshot), workspace.template?.fileName).template } : workspace;
+  const parts = requestedScopes(scope).map(part => hasWriteBaseline(snapshot, part)
+    ? scopePlan(planWrite(snapshot!, target), part) : planFileWrite(workspace, part));
+  return { blocks: parts.flatMap(p => p.blocks).sort((a,b) => a.address - b.address), channels: parts.flatMap(p => p.channels), names: parts.flatMap(p => p.names),
+    settings: parts.reduce((n,p) => n+p.settings,0), changedBytes: parts.reduce((n,p) => n+p.changedBytes,0), ...(parts.some(p=>p.mode==='file') ? {mode:'file' as const} : {}) };
+}
+
 export class D500Protocol {
   constructor(private link: RadioLink) {}
   async identify(signal?: AbortSignal): Promise<Uint8Array> {
@@ -140,10 +169,10 @@ export class D500Protocol {
   }
   /** A dedicated write session follows the factory capture: password ACK, X/ACK,
    * then host ACK + X/ACK for each following block. */
-  async writeBlocks(plan: WritePlan, identity: number[], progress: Progress, signal?: AbortSignal) {
+  async writeBlocks(plan: WritePlan, identity: number[] | null, progress: Progress, signal?: AbortSignal): Promise<number[]> {
     validatePlan(plan);
     const actualIdentity = await this.identify(signal);
-    if (identity.length !== actualIdentity.length || identity.some((v, i) => v !== actualIdentity[i])) throw new Error('设备识别不一致，写入已取消。');
+    if (identity && (identity.length !== actualIdentity.length || identity.some((v, i) => v !== actualIdentity[i]))) throw new Error('设备识别不一致，写入已取消。');
     if ((await this.link.read(1, signal))[0] !== 6) throw new Error('电台未确认写入');
     for (const [index, block] of plan.blocks.entries()) {
       checkAbort(signal);
@@ -153,6 +182,7 @@ export class D500Protocol {
       if ((await this.link.read(1))[0] !== 6) throw new Error(`写入 ${addressText(block.address)} 未获确认，请重新读取。`);
       progress(index + 1, plan.blocks.length, `写入 ${addressText(block.address)}`);
     }
+    return [...actualIdentity];
   }
 }
 export function validatePlan(plan: WritePlan) {
@@ -169,31 +199,32 @@ export function validatePlan(plan: WritePlan) {
 export type WriteScope = 'all' | 'channels' | 'settings';
 export function scopePlan(plan: WritePlan, scope: WriteScope): WritePlan {
   const blocks = plan.blocks.filter(b => scope === 'all' || (b.address < 3200 || b.address >= 4096) === (scope === 'channels'));
-  return { blocks, channels: plan.channels.filter(c => blocks.some(b => b.address === c * 16)), names: plan.names.filter(c => blocks.some(b => b.address === (256 + c) * 16)), settings: blocks.filter(b => b.address >= 3200 && b.address < 4096).length, changedBytes: blocks.reduce((n, b) => n + b.after.filter((v, i) => v !== b.before[i]).length, 0) };
+  return { blocks, channels: plan.channels.filter(c => blocks.some(b => b.address === c * 16)), names: plan.names.filter(c => blocks.some(b => b.address === (256 + c) * 16)), settings: blocks.filter(b => b.address >= 3200 && b.address < 4096).length, changedBytes: blocks.reduce((n, b) => n + b.after.filter((v, i) => v !== b.before[i]).length, 0), ...(plan.mode ? { mode: plan.mode } : {}) };
 }
 export type SessionFactory = () => Promise<RadioLink & { close(): Promise<void> }>;
-/** Direct delta write from the loaded device state. No automatic reread. */
-export async function programWorkspace(open: SessionFactory, workspace: Workspace, input: { snapshot: RadioSnapshot; plan: WritePlan }, scope: WriteScope, backup: (snapshot: RadioSnapshot) => Promise<void>, progress: Progress, signal?: AbortSignal): Promise<RadioSnapshot> {
+/** Direct file / delta write. No automatic configuration read or readback. */
+export async function programWorkspace(open: SessionFactory, workspace: Workspace, input: { snapshot: RadioSnapshot | null; plan: WritePlan; identity?: number[] | null }, scope: WriteScope, backup: (snapshot: RadioSnapshot) => Promise<void>, progress: Progress, signal?: AbortSignal): Promise<RadioSnapshot> {
   const { snapshot: before, plan: reviewed } = input;
-  validSnapshot(before);
+  if (before) validSnapshot(before);
   validatePlan(reviewed);
   if (!reviewed.blocks.length) throw new Error('没有需要写入的修改。');
-  const fresh = scopePlan(planWrite(before, workspace), scope);
-  if (JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('方案已变化，请重试。');
+  const fresh = planWorkspaceWrite(before, workspace, scope);
+  if (fresh.mode !== reviewed.mode || JSON.stringify(fresh.blocks) !== JSON.stringify(reviewed.blocks)) throw new Error('方案已变化，请重试。');
   // Preserve the last actual read. Acknowledged expected bytes are not a read backup.
-  if (before.source !== 'write-ack') await backup(before);
+  if (before && before.source !== 'write-ack') await backup(before);
   checkAbort(signal); progress(0, 1, '连接电台');
-  const link = await open(); let writingStarted = false;
+  const link = await open(); let writingStarted = false; let identity: number[];
   try {
     writingStarted = true;
-    await new D500Protocol(link).writeBlocks(fresh, before.identity, progress, signal);
+    identity = await new D500Protocol(link).writeBlocks(fresh, before?.identity ?? input.identity ?? null, progress, signal);
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}${writingStarted ? ' 写入未完成，请重新读取。' : ''}`);
   } finally { await link.close(); }
-  const expected = [...before.bytes];
+  const expected = before ? [...before.bytes] : parseRows(exportDat(workspace.channels, workspace.template, workspace.settings)).slice(0, CONFIG_SIZE / 16).flatMap(r => r.slice(3));
   for (const block of fresh.blocks) expected.splice(block.address, 16, ...block.after);
   progress(1, 1, '写入完成');
-  return { ...before, capturedAt: new Date().toISOString(), bytes: expected, source: 'write-ack' };
+  const knownScopes = [...new Set([...(before ? before.knownScopes ?? ['channels', 'settings'] as const : []), ...requestedScopes(scope)])];
+  return { schema: 'd500-radio-read-v1', capturedAt: new Date().toISOString(), bytes: expected, identity, source: 'write-ack', hardwareVerified: false, communicationProfile: 'cps-2025', knownScopes };
 }
 
 export interface WriteChange { target: string; field: string; before: string; after: string }

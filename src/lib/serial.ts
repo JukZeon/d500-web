@@ -7,7 +7,11 @@ export interface SerialPortLike {
   getInfo(): { usbVendorId?: number; usbProductId?: number };
   setSignals?(signals: { dataTerminalReady: boolean; requestToSend: boolean; break: boolean }): Promise<void>;
 }
-export interface SerialApi { requestPort(): Promise<SerialPortLike> }
+export interface SerialApi {
+  requestPort(): Promise<SerialPortLike>;
+  addEventListener?(type: 'disconnect', listener: (event: Event) => void): void;
+  removeEventListener?(type: 'disconnect', listener: (event: Event) => void): void;
+}
 export function serialApi(): SerialApi | undefined {
   return typeof navigator !== 'undefined' && globalThis.isSecureContext
     ? (navigator as Navigator & { serial?: SerialApi }).serial : undefined;

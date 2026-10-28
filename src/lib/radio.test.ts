@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { parseDat, exportDat, parseRows } from './dat';
 import { emptyWorkspace, newChannel } from './model';
-import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HARDWARE_WRITE_SMOKE_TESTED, HELLO, planWrite, programWorkspace, type WritePlan, readCommand, snapshotDat, type RadioSnapshot } from './radio';
+import { CONFIG_SIZE, D500Protocol, HARDWARE_WRITE_VERIFIED, HARDWARE_WRITE_SMOKE_TESTED, HELLO, hasWriteBaseline, planFileWrite, planWorkspaceWrite, planWrite, programWorkspace, type WritePlan, readCommand, snapshotDat, type RadioSnapshot } from './radio';
 import { checkAbort, SerialLink, type RadioLink, type SerialPortLike } from './serial';
 import { saveRadioBackup } from './radio-backups';
 import { acceptWriteResult } from './write-result';
@@ -84,6 +84,12 @@ describe('captured D500 protocol with synthetic device memory', () => {
     const link: RadioLink = { async write() {}, async read() { throw new Error('响应超时'); } };
     await expect(new D500Protocol(link).identify()).rejects.toThrow('握手失败');
   });
+  it('connects by identifying the device without reading channel or configuration memory', async () => {
+    const { snapshot } = setup(), io = new RadioSimulator([...snapshot.bytes]);
+    expect([...await new D500Protocol(io).identify()]).toEqual(io.identity);
+    expect(io.sent.filter(p => p[0] === 0x53)).toEqual([[0x53, 0x3d, 0xf0, 16]]);
+    expect(io.writes()).toHaveLength(0);
+  });
   it('stops on boot output during an active handshake without sending a second HELLO or writing data', async () => {
     const sent: number[][] = [];
     const link: RadioLink = { async write(bytes) { sent.push([...bytes]); }, async read() { return Uint8Array.of(0x55); } };
@@ -162,7 +168,7 @@ describe('captured D500 protocol with synthetic device memory', () => {
   it('sends no write when the loaded baseline conflicts or the backup fails', async () => {
     const { snapshot, workspace } = setup(); workspace.channels[0].rx = '439.55000'; const plan = planWrite(snapshot, workspace);
     const changed = new RadioSimulator([...snapshot.bytes]); changed.memory[0] ^= 1;
-    await expect(candidate(changed, workspace, plan, async () => {}, () => {})).rejects.toThrow('冲突');
+    await expect(candidate(changed, workspace, plan, async () => {}, () => {})).rejects.toThrow('方案已变化');
     expect(changed.writes()).toHaveLength(0);
     const io = new RadioSimulator([...snapshot.bytes]);
     await expect(candidate(io, workspace, plan, async () => { throw new Error('磁盘满'); }, () => {})).rejects.toThrow('磁盘满');
@@ -193,6 +199,49 @@ describe('captured D500 protocol with synthetic device memory', () => {
     }, next, { snapshot: first, plan }, 'all', async () => { throw new Error('not a real read'); }, () => {});
     expect(second.source).toBe('write-ack'); expect(io.writes()).toHaveLength(2);
     expect(io.sent.filter(p => p[0] === 0x53)).toHaveLength(2); // Password status only.
+  });
+  it('writes an unchanged loaded DAT without first reading the radio or creating a false backup', async () => {
+    const { snapshot, workspace } = setup(), io = new RadioSimulator([...snapshot.bytes]);
+    io.memory[0] ^= 1; io.memory[0x0e00] = 42;
+    const plan = planWorkspaceWrite(null, workspace, 'channels');
+    expect(plan.mode).toBe('file'); expect(plan.blocks).toHaveLength(400);
+    const result = await programWorkspace(async () => ({ write: io.write.bind(io), read: io.read.bind(io), async close() {} }), workspace,
+      { snapshot: null, plan }, 'channels', async () => { throw new Error('no actual read'); }, () => {});
+    expect(io.writes()).toHaveLength(400);
+    expect(io.sent.filter(p => p[0] === 0x53)).toEqual([[0x53, 0x3d, 0xf0, 16]]);
+    expect(io.memory.slice(0,16)).toEqual(snapshot.bytes.slice(0,16)); expect(io.memory[0x0e00]).toBe(42);
+    expect(result.knownScopes).toEqual(['channels']);
+    expect(hasWriteBaseline(result, 'channels')).toBe(true); expect(hasWriteBaseline(result, 'settings')).toBe(false);
+    await expect(saveRadioBackup(result)).rejects.toThrow('不是读机备份');
+    const next = acceptWriteResult(workspace, result, 'channels');
+    expect(planWorkspaceWrite(result, next, 'channels').blocks).toHaveLength(0);
+    expect(planWorkspaceWrite(result, next, 'settings').mode).toBe('file');
+    next.channels[0].name = 'EDIT';
+    const delta = planWorkspaceWrite(result, next, 'channels');
+    expect(delta.mode).toBeUndefined(); expect(delta.blocks.map(b => b.address)).toEqual([0x1000]);
+    const mixed = planWorkspaceWrite(result, next, 'all');
+    expect(mixed.mode).toBe('file'); expect(mixed.blocks).toHaveLength(14);
+    expect(mixed.channels).toHaveLength(0); expect(mixed.names).toEqual([0]);
+  });
+  it('limits file writes to channel/name ranges and confirmed settings blocks', () => {
+    const { workspace } = setup();
+    const settings = planFileWrite(workspace, 'settings'), channels = planFileWrite(workspace, 'channels'), all = planFileWrite(workspace, 'all');
+    expect(settings.blocks.map(b => b.address/16)).toEqual([224,225,226,227,240,241,242,243,244,245,246,247,251]);
+    expect(channels.blocks).toHaveLength(400); expect(all.blocks).toHaveLength(413);
+    expect(all.blocks.some(b => [200,228,248,252,456,500].includes(b.address/16))).toBe(false);
+  });
+  it('compares an imported DAT target against the device baseline rather than its own file', () => {
+    const { snapshot, workspace } = setup();
+    const loaded = parseDat(exportDat([{...workspace.channels[0],name:'FILE'}],workspace.template,workspace.settings));
+    const target = {...workspace,...loaded};
+    expect(planWorkspaceWrite(snapshot,target,'channels').blocks.map(b=>b.address)).toEqual([0x1000]);
+  });
+  it('does not send any file data when the connected device identity changes', async () => {
+    const { snapshot, workspace } = setup(), io = new RadioSimulator([...snapshot.bytes]);
+    const identity = [...io.identity]; identity[47] ^= 1;
+    await expect(programWorkspace(async () => ({write:io.write.bind(io),read:io.read.bind(io),async close(){}}),workspace,
+      {snapshot:null,plan:planFileWrite(workspace,'channels'),identity},'channels',async()=>{},()=>{})).rejects.toThrow('设备识别不一致');
+    expect(io.writes()).toHaveLength(0);
   });
   it('rejects forged write plans outside the allowlist before communicating', async () => {
     const { snapshot, workspace } = setup(), plan = planWrite(snapshot, workspace), io = new RadioSimulator([...snapshot.bytes]);

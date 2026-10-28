@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { exportDat, parseDat, parseRows } from './dat';
 import { emptyWorkspace, newChannel, type Workspace } from './model';
-import { CONFIG_SIZE, planWrite, scopePlan, type RadioSnapshot, type WriteScope } from './radio';
+import { CONFIG_SIZE, planFileWrite, planWrite, scopePlan, type RadioSnapshot, type WriteScope } from './radio';
 import { acceptWriteResult } from './write-result';
 
 function setup() {
@@ -41,5 +41,29 @@ describe('acknowledged write baseline', () => {
       expect(scopePlan(pending, scope).blocks).toHaveLength(0);
       expect(scopePlan(pending, scope === 'channels' ? 'settings' : 'channels').blocks.length).toBeGreaterThan(0);
     }
+  });
+  it('preserves a pending channel move when settings were written from a file without a channel baseline', () => {
+    const original = setup(), rows = parseRows(original.workspace.template!.original);
+    rows[0][3 + 14] |= 0x80;
+    const parsed = parseDat(rows.map(r => r.join(' ')).join('\n'));
+    const workspace = { ...original.workspace, ...parsed };
+    workspace.channels[0] = { ...workspace.channels[0], slot: 4, sourceSlot: 0, name: 'MOVE' };
+    workspace.settings!.text = { boot: 'TEST' };
+    const expected = exportDat(workspace.channels, workspace.template, workspace.settings);
+    const snapshot: RadioSnapshot = { ...original.snapshot, source: 'write-ack', knownScopes: ['settings'], bytes: parseRows(expected).slice(0,CONFIG_SIZE/16).flatMap(r=>r.slice(3)) };
+    const next = acceptWriteResult(workspace, snapshot, 'settings');
+    expect(next.channels[0].sourceSlot).toBe(4);
+    expect(parseRows(exportDat(next.channels,next.template,next.settings))).toEqual(parseRows(expected));
+    expect(planFileWrite(next,'channels').blocks.find(b=>b.address===4*16)!.after[14]&0x80).toBe(0x80);
+  });
+  it('retains settings from an imported file when only its channels have been written', () => {
+    const { workspace, snapshot } = setup();
+    const settings = {...workspace.settings!,text:{boot:'FILE'}};
+    const loaded = parseDat(exportDat([{...workspace.channels[0],name:'FILE'}],workspace.template,settings));
+    const target = {...workspace,...loaded}, after = {...snapshot,bytes:[...snapshot.bytes]};
+    for(const b of planFileWrite(target,'channels').blocks) after.bytes.splice(b.address,16,...b.after);
+    const next = acceptWriteResult(target,after,'channels');
+    expect(next.settings!.text!.boot).toBe('FILE');
+    expect(planWrite(after,next).blocks.map(b=>b.address)).toEqual([251*16]);
   });
 });

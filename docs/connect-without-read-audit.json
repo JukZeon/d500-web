@@ -1,0 +1,12 @@
+{
+  "date": "2026-10-28",
+  "version": "0.4.0-beta.5",
+  "captureSha256": "48f7fa5db235c12d04a752cc45c685106fea5c155a1ff2faa48b47a00538a95d",
+  "connected": true,
+  "channelAndSettingsReadCommands": 0,
+  "writeFrames": 0,
+  "identityAndPasswordStatusOnly": true,
+  "writeActionEnabledWithoutReading": true,
+  "configurationBackupCount": 0,
+  "scope": "Connection-only hardware test; no file data written in this test."
+}
