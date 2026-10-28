@@ -1,0 +1,16 @@
+name: 功能建议
+description: 改进工作台的编辑、文件处理或设备操作
+title: "[Feature] "
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: 使用场景
+      description: 当前遇到什么困难？希望怎样操作？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议
+      description: 说明预期行为，可附脱敏示例。

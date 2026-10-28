@@ -1,7 +1,7 @@
 {
   "name": "d500-workbench",
   "private": true,
-  "version": "0.4.0-beta.8",
+  "version": "0.4.0-beta.9",
   "type": "module",
   "license": "GPL-3.0-only",
   "scripts": {
@@ -29,5 +29,17 @@
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
   },
-  "author": "BA7KTC / JukZeon"
+  "author": "BA7KTC / JukZeon",
+  "description": "Browser-based channel and configuration editor for the original Zastone D500.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JukZeon/d500-web.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JukZeon/d500-web/issues"
+  },
+  "homepage": "https://github.com/JukZeon/d500-web#readme",
+  "engines": {
+    "node": ">=22.12.0"
+  }
 }

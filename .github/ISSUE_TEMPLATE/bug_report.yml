@@ -1,0 +1,28 @@
+name: 问题反馈
+description: 文件处理、界面或电台通信异常
+title: "[Bug] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题与复现步骤
+      description: 说明预期结果、实际结果及复现方式。
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 工作台版本、浏览器与系统
+      placeholder: 例如 v0.4.0-beta.9 / Chrome / Windows 11
+    validations:
+      required: true
+  - type: textarea
+    id: radio
+    attributes:
+      label: 电台与写频线
+      description: 通信问题请注明电台硬件或固件版本、写频线，以及原厂软件是否可正常使用。
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 错误信息或最小样例
+      description: 仅提供脱敏日志或合成样例，不上传个人配置、密码、密钥或原厂软件。

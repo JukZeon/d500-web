@@ -12,3 +12,11 @@ playwright-report/
 test-results/
 *.log
 .deploy/
+outputs/
+# Personal radio files and captures stay local.
+*.dat
+*.xlsx
+*.xls
+*.d500.json
+*.pcap
+*.pcapng

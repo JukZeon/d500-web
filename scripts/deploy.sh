@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 task_root="$(cd "$(dirname "$0")/.." && pwd)"
-task_host="${D500_SSH_HOST:-d500-host}"
+task_host="${D500_SSH_HOST:?Set D500_SSH_HOST to your SSH destination}"
 task_release="$(git -C "$task_root" rev-parse --short=12 HEAD)"
 task_transport=(-o BatchMode=yes -o ConnectTimeout=15)
 if [ -n "${D500_SSH_PROXY_COMMAND:-}" ]; then
@@ -30,4 +30,4 @@ done
 echo 'Health check failed; the previous release remains available for rollback.' >&2
 exit 1
 REMOTE
-echo "Deployed $task_release. Verify https://d500.example.com/version.json"
+echo "Deployed $task_release. Verify /version.json on your configured HTTPS host."
