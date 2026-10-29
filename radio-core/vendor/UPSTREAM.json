@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/kk7ds/chirp",
+  "revision": "0b4076d9b19a2a133d11f31546cff8153b39eb89",
+  "license": "GPL-3.0-or-later (core); GPL-2.0-or-later (drivers)",
+  "unmodified": true,
+  "sha256": "1189ff5939d4af5da22bf4c9439321107893a1599d06386a18c0f80f16a91575",
+  "fixtures": {
+    "Baofeng_UV-5R.img": "220d85a949bd3370377d411f34d20482ce1513cc0c6b6a632e3722f0db86431c",
+    "Baofeng_UV-17Pro.img": "d5ca03c7b888a8c5e6ffdb183f2f5a06f508ead5187bbc9593340db076f8c54b",
+    "Quansheng_UV-K5.img": "dff994b64ded85bc553914cdcf393ba08accf101ff8b0de6b27a07476890e1a1",
+    "Quansheng_UV-K5_losehu.img": "79a35cab68fd257a4046d603d5e55458ff1e81e3546b00c5b905b08d78e80806",
+    "Quansheng_UV-K5_egzumer.img": "48e74eaef5343f6dc898e4a431bd9d3577d78b08840748b3c9cf298f3e1474f3"
+  }
+}

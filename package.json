@@ -1,7 +1,7 @@
 {
   "name": "d500-workbench",
   "private": true,
-  "version": "0.4.0-beta.9",
+  "version": "0.5.0-beta.1",
   "type": "module",
   "license": "GPL-3.0-only",
   "scripts": {
@@ -9,13 +9,17 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "npm run typecheck && vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "prebuild": "npm run prepare:radios",
+    "predev": "npm run prepare:radios",
+    "prepare:radios": "node scripts/package-radio-core.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "fflate": "^0.8.3",
     "lucide-react": "^1.62.0",
+    "pyodide": "314.0.7",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "xlsx": "file:vendor/xlsx-0.20.3.tgz"
@@ -30,7 +34,7 @@
     "vitest": "^5.0.5"
   },
   "author": "BA7KTC / JukZeon",
-  "description": "Browser-based channel and configuration editor for the original Zastone D500.",
+  "description": "Browser-based radio programming workbench for D500, Baofeng UV-5R / UV-5RH and Quansheng UV-K5 / K6.",
   "repository": {
     "type": "git",
     "url": "https://github.com/JukZeon/d500-web.git"

@@ -20,3 +20,9 @@ outputs/
 *.d500.json
 *.pcap
 *.pcapng
+# Generated browser radio runtime and local test files
+radio-core/__pycache__/
+public/radio/
+*.radio.json
+*.img
+__pycache__/

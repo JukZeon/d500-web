@@ -20,3 +20,13 @@ https://sheetjs.com / https://git.sheetjs.com/sheetjs/sheetjs
 Version 0.20.3 is vendored from the official CDN. Apache-2.0 license and distribution notices are included inside vendor/xlsx-0.20.3.tgz.
 
 React (MIT), Vite (MIT), Lucide (ISC), Vitest (MIT), and fflate (MIT) retain their package license files. IBM Plex Sans and IBM Plex Mono are distributed under SIL Open Font License 1.1; the license is included in public/FONT-LICENSE.txt. Official Zastone software, drivers and manuals are research downloads only and are not distributed in the application or source repository.
+
+## CHIRP and LOSEHU firmware references
+
+The embedded `radio-core/vendor/chirp.zip` contains unmodified Python source from CHIRP, revision `0b4076d9b19a2a133d11f31546cff8153b39eb89`: <https://github.com/kk7ds/chirp>. Core components are GPL-3.0-or-later and the selected drivers are GPL-2.0-or-later; original notices and the GPL text are preserved in the archive. The GPL-3.0-only application is distributed with this corresponding source. No proprietary programming software is included.
+
+`radio-core/losehu.py` adds independently implemented field mappings cross-checked against the LOSEHU firmware source at `49222a9f431a006dfaaaa665b839e4953b1a1882`: <https://github.com/losehu/uv-k5-firmware-custom>. See radio-core/README.md for scope and validation limits.
+
+## Pyodide
+
+Pyodide 314.0.7 (MPL-2.0) is installed from the official npm package and distributed unmodified to run the included drivers in a browser worker. It is loaded only for the new models; the D500 protocol remains TypeScript. License and source details are shipped in `radio-core/PYODIDE-LICENSE` and `radio-core/PYODIDE-NOTICE.txt`, and copied beside the runtime. CPython and other included components retain their original licenses in the upstream distribution.

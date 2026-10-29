@@ -1,6 +1,8 @@
 # 自行部署
 
-D500 Workbench 是静态前端，不需要数据库或应用后端。服务器只提供页面和资源，信道文件与串口通信均在访问者的浏览器内处理。
+D500 Workbench 是静态前端，不需要数据库或应用后端。服务器只提供页面和资源，信道文件、内置驱动与串口通信均在访问者的浏览器内处理。
+
+新增型号的运行时资源会随构建自动放入 `dist/radio/`，必须完整部署该目录。所有资源由同源提供，不依赖外部 CDN。页面必须保留 `Cross-Origin-Opener-Policy: same-origin`、`Cross-Origin-Embedder-Policy: require-corp`；CSP 需允许同源 Worker 和 `wasm-unsafe-eval`，项目 Nginx 配置已包括这些设置。不要把内置 Python 源文件当作服务器脚本执行，它们只作为静态资源供浏览器加载。
 
 ## 构建与静态托管
 

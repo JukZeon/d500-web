@@ -9,6 +9,8 @@ import ToneEditor from './components/ToneEditor';
 import RadioSettingsPanel from './components/RadioSettingsPanel';
 import { readSettings, settingsChanges } from './lib/settings';
 import { encodeName, MAX_NAME_BYTES } from './lib/encoding';
+import { RADIO_MODELS, type RadioModel } from './lib/chirp';
+const ChirpWorkbench = lazy(() => import('./components/ChirpWorkbench'));
 const RadioPanel = lazy(() => import('./components/RadioPanel'));
 const nameLength = (text: string) => { try { return encodeName(text).length; } catch { return '—'; } };
 
@@ -46,7 +48,7 @@ function ModalShell({ title, subtitle, close, children }: { title: string; subti
   }, []);
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}><div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} className="modal"><header><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><IconButton title="关闭对话框" onClick={close}><X size={20} /></IconButton></header>{children}</div></div>;
 }
-export default function App() {
+function D500App({ switcher, onBusy }: { switcher: ReactNode; onBusy: (busy: boolean) => void }) {
   const [workspace, setWorkspace] = useState<Workspace>(initial);
   const [past, setPast] = useState<Workspace[]>([]), [future, setFuture] = useState<Workspace[]>([]);
   const [selected, setSelected] = useState<number[]>([]), [active, setActive] = useState<number | null>(null);
@@ -54,6 +56,7 @@ export default function App() {
   const [view, setView] = useState('channels'), [modal, setModal] = useState<Modal>(null), [pending, setPending] = useState<Pending | null>(null);
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null), [saving, setSaving] = useState('已保存');
   const [radioConnected, setRadioConnected] = useState(false), [radioBusy, setRadioBusy] = useState(false);
+  useEffect(() => { onBusy(radioBusy); return () => onBusy(false); }, [onBusy, radioBusy]);
   const [drop, setDrop] = useState(false), [busy, setBusy] = useState(false), [sidebar, setSidebar] = useState(false);
   const [paste, setPaste] = useState(''), [batch, setBatch] = useState(EMPTY_BATCH);
   const [showErrors, setShowErrors] = useState(false), [sortBy, setSortBy] = useState<'slot' | 'rx' | 'name'>('slot');
@@ -197,11 +200,12 @@ export default function App() {
     <input className="file-input" aria-label="导入信道文件" ref={fileRef} type="file" accept=".dat,.xlsx,.xls,.csv,.tsv,.json" onChange={e => { if (e.target.files?.[0]) void readFile(e.target.files[0]); }} />
     <aside className="sidebar" inert={radioBusy}>
       <a className="brand" href="#" onClick={e => { e.preventDefault(); setView('channels'); }}><span className="brand-mark"><Radio size={23} /></span><span>D500<span className="brand-sub">写频工作台</span></span></a>
+      {switcher}
 
       <nav><button className={view === 'radio' ? 'nav active' : 'nav'} onClick={() => { setView('radio'); setSidebar(false); }}><Radio size={18} />电台读写{radioConnected && <span className="status-dot" />}</button><button className={view === 'channels' ? 'nav active' : 'nav'} onClick={() => { setView('channels'); setSidebar(false); }}><Radio size={18} />信道管理<span className="nav-count">{workspace.channels.length}</span></button><button className={view === 'settings' ? 'nav active' : 'nav'} onClick={() => { setView('settings'); setSidebar(false); }}><Settings2 size={18} />电台设置</button><button className={view === 'spectrum' ? 'nav active' : 'nav'} onClick={() => { setView('spectrum'); setSidebar(false); }}><Activity size={18} />频率分布</button><button className={view === 'files' ? 'nav active' : 'nav'} onClick={() => { setView('files'); setSidebar(false); }}><FolderOpen size={18} />文件与备份</button></nav>
       <div className="sidebar-section second">我的分组 <button title="显示全部分组" onClick={() => { setView('channels'); setGroup('*'); }}><ListFilter size={14} /></button></div>
       <div className="group-list"><button className={group === '*' ? 'group-nav selected' : 'group-nav'} onClick={() => { setGroup('*'); setView('channels'); }}><span className="group-dot" />全部信道<span>{workspace.channels.length}</span></button>{groups.map((g, i) => <button key={g} className={group === g ? 'group-nav selected' : 'group-nav'} onClick={() => { setGroup(g); setView('channels'); }}><span className={`group-dot color-${i % 4}`} />{g}<span>{workspace.channels.filter(c => c.group === g).length}</span></button>)}{!groups.length && <p className="sidebar-hint">暂无分组</p>}</div>
-      <div className="sidebar-bottom"><button className="nav help-nav" onClick={() => setModal('help')}><CircleHelp size={17} />帮助<ChevronRight size={15} /></button><div className="author"><span><strong>BA7KTC</strong></span><span className="version">v0.4 β</span></div></div>
+      <div className="sidebar-bottom"><button className="nav help-nav" onClick={() => setModal('help')}><CircleHelp size={17} />帮助<ChevronRight size={15} /></button><div className="author"><span><strong>BA7KTC</strong></span><span className="version">v0.5 β</span></div></div>
     </aside>
     <div className="workspace-shell">
       <header className="topbar"><div className="breadcrumb"><IconButton title="打开侧栏" onClick={() => setSidebar(!sidebar)}><Menu size={18} /></IconButton><strong>{view === 'channels' ? '信道' : view === 'spectrum' ? '频率分布' : view === 'settings' ? '电台设置' : view === 'radio' ? '电台读写' : '文件'}</strong><span className="save-status">{saving}</span></div><div className="topbar-right"><button className="btn" disabled={radioBusy || busy} onClick={() => fileRef.current?.click()}><Upload size={15} />导入</button><button className="btn" disabled={radioBusy} onClick={() => setModal('export')}><Download size={15} />导出</button><button className="btn primary" disabled={radioBusy} onClick={() => setView('radio')}><Radio size={15} />{radioBusy ? '电台操作中…' : '读写电台'}</button><a className="github-link" href={PROJECT_GITHUB} target="_blank" rel="noreferrer" aria-label="项目 GitHub"><GitBranch size={16} /><span>GitHub</span></a></div></header>
@@ -233,4 +237,16 @@ export default function App() {
     {modal === 'paste' && <ModalShell title="粘贴表格" close={() => setModal(null)}><p className="import-note">无表头列顺序：名称、接收 MHz、发射 MHz、发射哑音。</p><textarea className="paste-area mono" aria-label="粘贴信道数据" placeholder={'本地直通\t438.50000\t438.50000\t\nU段中继\t439.55000\t434.55000\t88.5'} value={paste} onChange={e => setPaste(e.target.value)} /><div className="modal-actions"><button className="btn primary" disabled={!paste.trim()} onClick={() => void pasteImport()}>预览</button></div></ModalShell>}
     {modal === 'help' && <ModalShell title="帮助" subtitle={`v${version} · BA7KTC`} close={() => setModal(null)}><div className="help-content"><h3>读写</h3><p>默认只写修改；完整覆盖请选择完整写入。核对时手动读取。</p><h3>文件</h3><p>DAT 保存信道与配置；完整方案另含分组和备注。支持 XLSX / CSV / TSV 导入。</p><h3>保存</h3><p>草稿保存在本机；跨设备使用请导出完整方案。</p><div className="help-links"><a href={PROJECT_GITHUB} target="_blank" rel="noreferrer"><GitBranch size={15} />GitHub</a><a href="/source.zip" download>源码<Download size={14} /></a><a href="/LICENSE.txt" target="_blank" rel="noreferrer">许可证<ChevronRight size={14} /></a></div></div></ModalShell>}
   </div>;
+}
+
+export default function App() {
+  const [model, setModel] = useState<RadioModel>(() => {
+    try { const saved = localStorage.getItem('radio-workbench-model'); return RADIO_MODELS.find(m => m.id === saved)?.id ?? 'd500'; }
+    catch { return 'd500'; }
+  });
+  const [busy, setBusy] = useState(false);
+  const switcher = <label className="model-switch"><span>电台型号</span><select aria-label="电台型号" disabled={busy} value={model} onChange={e => { const next = e.target.value as RadioModel; try { localStorage.setItem('radio-workbench-model',next); } catch { /* Storage may be disabled; switching still works. */ } setModel(next); }}>
+    {RADIO_MODELS.map(m => <option key={m.id} value={m.id}>{m.label} · {m.variant}</option>)}
+  </select></label>;
+  return model === 'd500' ? <D500App switcher={switcher} onBusy={setBusy}/> : <Suspense fallback={<p className="chirp-loading">载入型号…</p>}><ChirpWorkbench key={model} model={model} switcher={switcher} onBusy={setBusy}/></Suspense>;
 }
