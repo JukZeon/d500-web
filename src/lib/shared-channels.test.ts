@@ -18,7 +18,7 @@ describe('shared channel library and cross-model plans',()=>{
  });
  it('keeps a full library name when a second model supplies an ASCII alias',()=>{
   const library=mergeLibrary(emptyLibrary(),[row()],()=> 'library-one');
-  const result=mergeLibrary(library,[{...row(),sourceModel:'uv5r',name:'GZ-A'}]);
+  const result=mergeLibrary(library,[{...row(),sourceModel:'uv5r',name:'GZ-A',libraryId:'library-one'}]);
   expect(result.channels[0]).toMatchObject({name:'A中继',aliases:{uv5r:'GZ-A'}});
  });
  it('supports offline drafts for every handheld without inventing a writable image',()=>{
@@ -103,7 +103,7 @@ describe('shared channel library and cross-model plans',()=>{
  });
  it('links a matching unassociated channel without duplicating it',()=>{
   const source={...row(),id:'library-one',name:'TEST'};
-  const plan=planTransfer([source],'uv5rh',[{...row(77),sourceModel:'uv5rh'}],{mode:'sync'});
+  const plan=planTransfer([source],'uv5rh',[{...row(77),name:'TEST',sourceModel:'uv5rh'}],{mode:'sync'});
   expect(plan[0].channel.number).toBe(77);expect(plan[0].channel.libraryId).toBe('library-one');
  });
  it('does not mark metadata, normalized empty flags or untouched records as radio modifications',()=>{
@@ -158,6 +158,15 @@ describe('shared channel library and cross-model plans',()=>{
   const tooLong={...source,name:'一二三四五六七'};
   expect(planTransfer([tooLong],'uv5rh',[],{mode:'append'})[0].channel.name).toBe('GZ-A');
   expect(planTransfer([{...tooLong,aliases:undefined}],'uv5rh',[],{mode:'append'})[0].errors.join()).toContain('12 字节');
+ });
+ it('keeps separate co-channel stations and their aliases when importing or syncing',()=>{
+  let id=0;const stations=[{...row(33),id:'a',name:'荷塘站',group:'江门'},{...row(130),id:'b',name:'福田站',group:'深圳'},{...row(131),id:'c',name:'福田二台',group:'深圳'}];
+  const library=mergeLibrary(emptyLibrary(),stations,()=>`library-${++id}`);
+  expect(library.channels.map(c=>c.name)).toEqual(['荷塘站','福田站','福田二台']);
+  expect(mergeLibrary(library,stations).channels).toHaveLength(3);
+  const target={...stations[0],id:'uv5rh:33',sourceModel:'uv5rh' as const};
+  const plan=planTransfer(library.channels,'uv5rh',[target],{mode:'sync'});
+  expect(plan.map(c=>c.channel.number)).toEqual([33,1,2]);expect(plan.every(c=>!c.errors.length)).toBe(true);
  });
 
 });

@@ -90,10 +90,10 @@ export function importChirpTable(data: ArrayBuffer, f: ChirpFeatures): ChirpChan
   const book = readSpreadsheet(data, { cellFormula:false, cellHTML:false, sheetRows:f.bounds[1]-f.bounds[0]+22 });
   const normalize = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/[\s()（）_\-/]/g, '');
   const aliases = {
-    number: ['number', 'location', '信道编号', '信道号', '序号', '信道编号0199'], name: ['name', '名称', '信道名称'],
+    number: ['number', 'location', '信道', '信道编号', '信道号', '序号', '信道编号0199'], name: ['name', '名称', '信道名称'],
     rx: ['rx', 'frequency', '接收频率', '接收频率mhz', '频率'], tx: ['tx', '发射频率', '发射频率mhz'],
     rxTone: ['rxtone', '接收哑音', '接收亚音', '接收亚音频hz'], txTone: ['txtone', '发射哑音', '发射亚音', '发送亚音频hz'], group: ['group','分组','地区','分区'],
-    rxType: ['接收亚音类型','接收亚音频类型','rxtonetype'], txType:['发送亚音类型','发射亚音类型','txtonetype'], rxDcs:['接收亚音数码','rxdcs'], txDcs:['发送亚音数码','发射亚音数码','txdcs'], mode: ['mode', '模式', '带宽'], power: ['power', '功率'], comment: ['comment', '备注'],
+    rxType: ['接收亚音类型','接收亚音频类型','rxtonetype'], txType:['发送亚音类型','发射亚音类型','txtonetype'], rxDcs:['接收亚音数码','rxdcs'], txDcs:['发送亚音数码','发射亚音数码','txdcs'], mode: ['mode', '模式', '带宽'], power: ['power', '功率'], comment: ['comment', '备注'], scan:['扫描添加','scanadd'],skip:['skip','跳过扫描'],
   };
   for (const sheet of book.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[sheet], { header: 1, defval: '' });
@@ -122,6 +122,15 @@ export function importChirpTable(data: ArrayBuffer, f: ChirpFeatures): ChirpChan
       if (mode) c.mode = /窄|nfm|narrow|12\.5/i.test(mode) ? 'NFM' : /宽|wide|25/i.test(mode) ? 'FM' : mode.toUpperCase();
       const power = get(row, 'power');
       if (power) c.power = f.powers.find(p => p.toLowerCase() === ({ 高: 'high', 中: 'medium', 低: 'low' }[power] ?? power.toLowerCase())) ?? power;
+      const scan=get(row,'scan').toLowerCase(),skip=get(row,'skip').toUpperCase();
+      if(columns.skip>=0&&skip){
+        if(!['S','P'].includes(skip))throw Error(`信道 ${c.number} 扫描标记无效`);
+        c.skip=skip;
+      }else if(columns.scan>=0&&scan){
+        if(['否','关闭','关','0','false','off','no','停用'].includes(scan))c.skip='S';
+        else if(['是','开启','开','1','true','on','yes','启用'].includes(scan))c.skip='';
+        else throw Error(`信道 ${c.number} 扫描添加值无效`);
+      }
       return c;
     });
     if (!result.length) throw new Error('表格没有信道');

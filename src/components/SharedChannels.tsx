@@ -4,7 +4,7 @@ import { RADIO_MODELS, parseChirpDraft, type RadioModel } from '../lib/chirp';
 import { emptyWorkspace } from '../lib/model';
 import { download, parseProject } from '../lib/project';
 import { useAutosave } from '../lib/use-autosave';
-import { D500_STORAGE, LIBRARY_STORAGE, applyChirpTransfer, applyD500Transfer, boundsFor, channelIdentity, chirpStorage, compatibleName, currentNameFeatures, emptyLibrary, managedChirp, managedD500, mergeLibrary, offlineDraft, parseLibrary, planTransfer, type ChannelLibrary, type ManagedChannel, type TransferMode } from '../lib/shared-channels';
+import { D500_STORAGE, LIBRARY_STORAGE, applyChirpTransfer, applyD500Transfer, boundsFor, chirpStorage, compatibleName, currentNameFeatures, emptyLibrary, findLibraryChannel, managedChirp, managedD500, mergeLibrary, offlineDraft, parseLibrary, planTransfer, type ChannelLibrary, type ManagedChannel, type TransferMode } from '../lib/shared-channels';
 import ChannelEditor from './ChannelEditor';
 import WorkbenchDialog from './WorkbenchDialog';
 import { parseDat } from '../lib/dat';
@@ -25,7 +25,7 @@ function initialLibrary():ChannelLibrary{
   let library=emptyLibrary();
   for(const model of RADIO_MODELS){
    try{for(const row of storedProfile(model.id).channels){
-    const old=library.channels.find(c=>channelIdentity(c)===channelIdentity(row));
+    const old=findLibraryChannel(library.channels,row);
     if(old){if(old.name!==row.name)old.aliases={...old.aliases,[model.id]:row.name};}
     else library=mergeLibrary(library,[row]);
    }}catch{/* A damaged device draft is left untouched. */}
@@ -43,7 +43,7 @@ export function SharedChannelsProvider({children,currentModel}:{children:ReactNo
  const store=useCallback((rows:ManagedChannel[])=>{try{setLibrary(mergeLibrary(library,rows));setNotice(`已加入信道库 · ${rows.length} 条`);}catch(e){setNotice((e as Error).message);}},[library]);
  const transfer=useCallback((rows:ManagedChannel[])=>{
   const next=currentModel;
-  setSource(rows.map(row=>{const entry=library.channels.find(c=>c.id===row.id||c.id===row.libraryId||channelIdentity(c)===channelIdentity(row));return {...row,libraryId:entry?.id??row.libraryId,aliases:entry?.aliases??row.aliases};}));
+  setSource(rows.map(row=>{const entry=findLibraryChannel(library.channels,row);return {...row,libraryId:entry?.id??row.libraryId,aliases:entry?.aliases??row.aliases};}));
   setTarget(next);setStart(boundsFor(next)[0]);setMode('sync');setNameMode('full');setNames({});setSkip(false);setError('');
  },[currentModel,library]);
  let profile:ProfileAccess|undefined,loadError='';
@@ -58,7 +58,7 @@ export function SharedChannelsProvider({children,currentModel}:{children:ReactNo
   if(!ready.length){setError('没有可以应用的信道');return;}
   try{
    profile.apply(ready.map(row=>row.channel),mode);
-   setLibrary(old=>({...old,channels:old.channels.map(channel=>{const row=ready.find(r=>r.source.id===channel.id||channelIdentity(r.source)===channelIdentity(channel));return row&&row.channel.name!==channel.name?{...channel,aliases:{...channel.aliases,[target]:row.channel.name}}:channel;}),updatedAt:new Date().toISOString()}));
+   setLibrary(old=>{const namesById=new Map(ready.map(row=>[findLibraryChannel(old.channels,row.source)?.id,row.channel.name]));return {...old,channels:old.channels.map(channel=>{const name=namesById.get(channel.id);return name!==undefined&&name!==channel.name?{...channel,aliases:{...channel.aliases,[target]:name}}:channel;}),updatedAt:new Date().toISOString()};});
    setNotice(`已更新 ${RADIO_MODELS.find(m=>m.id===target)!.label} 方案 · ${ready.length} 条`);setSource(null);
   }catch(e){setError((e as Error).message);}
  }

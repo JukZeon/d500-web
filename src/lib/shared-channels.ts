@@ -61,10 +61,21 @@ export function channelIdentity(row: Pick<ManagedChannel, 'rx' | 'tx' | 'rxTone'
   const tone = (s: string) => /^D/i.test(s) ? s.toUpperCase().replace(/R$/, 'I') : s ? String(Number(s)) : '';
   return JSON.stringify([frequency(row.rx), frequency(row.tx), tone(row.rxTone), tone(row.txTone), row.mode]);
 }
+/** RF reuse does not identify a station: match its name (or known alias) and region too. */
+export function sameStation(a:ManagedChannel,b:ManagedChannel):boolean {
+  if(channelIdentity(a)!==channelIdentity(b)||a.group&&b.group&&a.group!==b.group)return false;
+  const names=new Set([a.name,...Object.values(a.aliases??{})].filter(Boolean));
+  return [b.name,...Object.values(b.aliases??{})].some(name=>!!name&&names.has(name));
+}
+export function findLibraryChannel(channels:ManagedChannel[],row:ManagedChannel):ManagedChannel|undefined {
+  return channels.find(c=>c.id===row.id||c.id===row.libraryId)
+    ??channels.find(c=>row.sourceModel&&c.sourceModel===row.sourceModel&&c.number===row.number)
+    ??channels.find(c=>sameStation(c,row));
+}
 export function mergeLibrary(library: ChannelLibrary, rows: ManagedChannel[], id: () => string = () => crypto.randomUUID()): ChannelLibrary {
   const channels = library.channels.map(c => ({ ...c }));
   for (const row of rows) {
-    const index = channels.findIndex(c => c.id === row.id || c.id === row.libraryId || channelIdentity(c) === channelIdentity(row));
+    const match=findLibraryChannel(channels,row),index=match?channels.indexOf(match):-1;
     if (index >= 0) {
       const before = channels[index];
       channels[index] = row.sourceModel && before.sourceModel && row.sourceModel !== before.sourceModel && before.name
@@ -119,7 +130,7 @@ export function planTransfer(source: ManagedChannel[], model: RadioModel, target
     if (options.mode === 'append' || options.mode === 'sync') {
       const link = row.libraryId ?? (!RADIO_MODELS.some(m=>row.id.startsWith(m.id+':')) ? row.id : undefined);
       const linked = options.mode === 'sync' ? target.find(c => link && c.libraryId === link)
-        ?? target.find(c => (!link || !c.libraryId) && channelIdentity(c) === channelIdentity(row)) : undefined;
+        ?? target.find(c => (!link || !c.libraryId) && sameStation(c,row)) : undefined;
       if(linked) number=linked.number;
       else {while (occupied.has(cursor) && cursor <= hi) cursor++; number = cursor++;}
     }

@@ -32,7 +32,7 @@ export const MENU_SETTINGS: SettingDefinition[] = [
   { key: '54', label: '扬声器位置', group: '声音与操作', options: ['主机', '面板'], native: '4a70f0' },
   { key: '55', label: '麦克风位置', group: '声音与操作', options: ['主机', '面板'], native: '49f570' },
   { key: '56', label: '蓝牙适配器', group: '声音与操作', options: offOn, native: '4a3440' },
-  { key: '8', label: '界面语言', group: '屏幕显示', options: ['English', '中文'], native: '49d730' },
+  { key: '8', label: '界面语言', group: '屏幕显示', options: ['英文', '中文'], native: '49d730' },
   { key: '27', label: 'A 区显示方式', group: '屏幕显示', options: ['频率 + 编号', '编号', '名称 + 编号'], native: '49e040' },
   { key: '28', label: 'B 区显示方式', group: '屏幕显示', options: ['频率 + 编号', '编号', '名称 + 编号'], native: '49e3b0' },
   ...(['状态栏', 'A 区', 'B 区', '电压', '信号', '菜单', '发射', '接收'].map((label, i) => ({ key: String(32 + i), label: `${label}颜色`, group: '屏幕显示', options: colors, native: ['4a8780', '4a5cc0', '4a6030', '49b590', '4a6d80', '49ef50', '4abe60', '4a4700'][i] }))),

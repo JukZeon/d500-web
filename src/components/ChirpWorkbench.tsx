@@ -13,25 +13,16 @@ import WorkspaceNav, { VIEW_LABELS, type WorkbenchView } from './WorkspaceNav';
 import { SharedLibraryPanel } from './SharedChannels';
 import FrequencyPanel from './FrequencyPanel';
 import WorkbenchDialog from './WorkbenchDialog';
-const LABELS: Record<string, string> = {
-  'Limits disabled for modified firmware': '扩展频段', 'High': '高', 'Low': '低', 'Medium': '中', 'Med': '中', 'Off': '关闭', 'On': '开启',
-  'Basic Settings': '基本设置', 'Advanced Settings': '高级设置', 'Other Settings': '其他设置', 'Work Mode Settings': '工作模式',
-  'Programmable keys': '按键设置', 'Scan Lists': '扫描列表', 'FM Radio': '收音机', 'Driver information': '设备信息',
-  'DTMF Settings': 'DTMF 设置', 'DTMF Contacts': 'DTMF 联系人', 'Unlock Settings': '频段限制', 'Squelch': '静噪',
-  'Battery Saver': '省电模式', 'VOX Level': '声控等级', 'Backlight Timeout': '背光时间', 'Keypad Beep': '按键音',
-  'Timeout Timer': '发射限时', 'Voice Prompt': '语音提示', 'Scan Mode': '扫描方式', 'Busy Channel Lockout': '繁忙禁发',
-  'Keypad Lock': '键盘锁', 'Dual Watch': '双守候', 'EEPROM size': 'EEPROM 容量', 'Firmware version': '固件版本',
-};
-const label = (s: string | number) => LABELS[String(s)] ?? String(s);
+import { radioLabel } from '../lib/radio-labels';
 export function SettingsTree({ nodes, edits, onChange, disabled }: { nodes: SettingNode[]; edits: SettingEdits; onChange: (edits: SettingEdits) => void; disabled: boolean }) {
-  return <>{nodes.map(node => node.children ? <details className="chirp-setting-group" key={node.key} open><summary>{label(node.label)}</summary><SettingsTree nodes={node.children} edits={edits} onChange={onChange} disabled={disabled} /></details> :
-    <label className="chirp-field" key={node.key}><span title={node.doc}>{label(node.label)}</span><span className="chirp-values">{node.values?.map((spec, i) => {
+  return <>{nodes.map(node => node.children ? <details className="chirp-setting-group" key={node.key} open><summary>{radioLabel(node.label)}</summary><SettingsTree nodes={node.children} edits={edits} onChange={onChange} disabled={disabled} /></details> :
+    <label className="chirp-field" key={node.key}><span title={node.doc?radioLabel(node.doc):undefined}>{radioLabel(node.label)}</span><span className="chirp-values">{node.values?.map((spec, i) => {
       const value = edits[node.key]?.[i] ?? spec.value;
       const change = (v: string | boolean | number) => { const next = [...(edits[node.key] ?? node.values!.map(s => s.value))]; next[i] = v; onChange({ ...edits, [node.key]: next }); };
       const locked = disabled || !spec.mutable;
-      return spec.type === 'list' ? <select key={i} aria-label={node.label} disabled={locked} value={String(value)} onChange={e => change(e.target.value)}>{spec.options?.map((v, n) => <option key={n} value={v}>{label(v)}</option>)}</select>
-        : spec.type === 'boolean' ? <input key={i} aria-label={node.label} type="checkbox" disabled={locked} checked={Boolean(value)} onChange={e => change(e.target.checked)} />
-        : <input key={i} aria-label={node.label} disabled={locked} type={spec.type === 'number' ? 'number' : 'text'} min={spec.min} max={spec.type === 'number' ? spec.max : undefined} step={spec.step} maxLength={spec.type === 'string' ? spec.max : undefined} value={String(value)} onChange={e => change(spec.type === 'number' ? Number(e.target.value) : e.target.value)} />;
+      return spec.type === 'list' ? <select key={i} aria-label={radioLabel(node.label)} disabled={locked} value={String(value)} onChange={e => change(e.target.value)}>{spec.options?.map((v, n) => <option key={n} value={v}>{radioLabel(v)}</option>)}</select>
+        : spec.type === 'boolean' ? <input key={i} aria-label={radioLabel(node.label)} type="checkbox" disabled={locked} checked={Boolean(value)} onChange={e => change(e.target.checked)} />
+        : <input key={i} aria-label={radioLabel(node.label)} disabled={locked} type={spec.type === 'number' ? 'number' : 'text'} min={spec.min} max={spec.type === 'number' ? spec.max : undefined} step={spec.step} maxLength={spec.type === 'string' ? spec.max : undefined} value={String(value)} onChange={e => change(spec.type === 'number' ? Number(e.target.value) : e.target.value)} />;
     })}</span></label>)}</>;
 }
 function initial(model:ChirpModel):ChirpDraft {
