@@ -169,4 +169,17 @@ describe('shared channel library and cross-model plans',()=>{
   expect(plan.map(c=>c.channel.number)).toEqual([33,1,2]);expect(plan.every(c=>!c.errors.length)).toBe(true);
  });
 
+ it('keeps detected LOSEHU ASCII and historical-font limits across library transfers',()=>{
+  const standard={...baselineFeatures('uvk5-losehu'),nameEncoding:'ascii' as const,nameBytes:10,nameLength:10,characters:' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'};
+  expect(currentNameFeatures('uvk5-losehu',standard)).toBe(standard);
+  expect(planTransfer([{...row(),name:'新会中继'}],'uvk5-losehu',[],{mode:'append'},standard)[0].errors.join()).toContain('名称');
+  expect(planTransfer([{...row(),name:'新会中继',aliases:{'uvk5-losehu':'XINHUI'}}],'uvk5-losehu',[],{mode:'append'},standard)[0].channel.name).toBe('XINHUI');
+  expect(compatibleName('ABCDEFGHIJKLM','uvk5-losehu',1,standard)).toBe('ABCDEFGHIJ');
+  const legacy={...baselineFeatures('uvk5-losehu'),nameEncoding:'losehu117' as const,nameBytes:13,nameLength:13,characters:standard.characters+'一二三四五六七新会中继'};
+  expect(currentNameFeatures('uvk5-losehu',legacy)).toBe(legacy);
+  expect(planTransfer([{...row(),name:'新会中继'}],'uvk5-losehu',[],{mode:'append'},legacy)[0].errors).toEqual([]);
+  expect(compatibleName('一二三四五六七','uvk5-losehu',1,legacy)).toBe('一二三四五六');
+  expect(compatibleName('A一二三四五六','uvk5-losehu',1,legacy)).toBe('A一二三四五六');
+ });
+
 });

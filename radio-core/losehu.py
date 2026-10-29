@@ -6,10 +6,14 @@ The bundled legacy CHIRP script uses obsolete side-key addresses; those keys
 are deliberately NOT exposed here. No calibration, passwords, locks or boot
 code are editable. Byte offsets must not be inferred from OEM settings.
 """
-import re
-from chirp.drivers.uvk5_cn import UVK5LoseHuRadio, NAME_BYTES as LOSEHU_NAME_BYTES
+import struct
+from chirp import chirp_common, errors, memmap
+from chirp.drivers import uvk5
+from chirp.drivers.uvk5_cn import UVK5LoseHuRadio, gb2312_charset, readmem_command, writemem_command
+from losehu_profiles import profile_for, encode_name, decode_name, FONT_117_ENCODE
 from chirp.settings import (RadioSetting, RadioSettingGroup,
-                            RadioSettingValueInteger, RadioSettingValueBoolean, RadioSettingValueList)
+                            RadioSettingValueInteger, RadioSettingValueBoolean, RadioSettingValueList,
+                            RadioSettingValueString, RadioSettings)
 
 # key, Chinese label, offset, maximum, display offset (firmware is zero-based).
 FIELDS = [
@@ -52,21 +56,186 @@ BY_KEY['beep'] = ('beep', '按键音', 0xE90, 1, 0)
 
 
 class LosehuRadio(UVK5LoseHuRadio):
-    NAME_BYTES = LOSEHU_NAME_BYTES
-    NAME_ENCODING = 'gb2312'
+    @property
+    def profile(self):
+        return profile_for(self.metadata.get('uvk5_firmware', ''))
+
+    def require_profile(self):
+        if self.profile is None:
+            firmware = self.metadata.get('uvk5_firmware', '') or '未识别'
+            raise errors.RadioError(f'暂不支持固件 {firmware}，未读写配置')
+        return self.profile
+
+    @classmethod
+    def k5_approve_firmware(cls, firmware):
+        return profile_for(firmware) is not None
+
+    @property
+    def eeprom_size(self):
+        if self._eeprom_size:
+            return self._eeprom_size
+        return self.profile.backup_size if self.profile else 0x2000
+
+    @property
+    def NAME_BYTES(self):
+        return self.profile.name_bytes if self.profile else 10
+
+    @property
+    def NAME_ENCODING(self):
+        return self.profile.encoding if self.profile else 'ascii'
+
+    def get_features(self):
+        features = super().get_features()
+        features.valid_name_length = self.NAME_BYTES
+        features.valid_characters = (chirp_common.CHARSET_ASCII if self.NAME_ENCODING == 'ascii' else
+                                     chirp_common.CHARSET_ASCII + ''.join(FONT_117_ENCODE) if self.NAME_ENCODING == 'losehu117' else gb2312_charset())
+        return features
+
+    def process_mmap(self):
+        self.require_profile()
+        self._check_download_size(len(self._mmap))
+        super().process_mmap()
+
+    def _check_download_size(self, size):
+        profile = self.require_profile()
+        valid = (0x2000,) if profile.protocol == 'official' else (0x2000, 0x4000, 0x8000, 0x10000, 0x20000, 0x40000)
+        if size not in valid:
+            raise errors.RadioError('镜像长度与该固件的备份范围不匹配')
+
+    def _check_upload_image(self, image_size, firmware):
+        self._check_download_size(image_size)
+        # A channel library can cross versions, an entire EEPROM configuration
+        # cannot: unnamed settings bytes may have moved between releases.
+        image_firmware = self.metadata.get('uvk5_firmware', '')
+        if firmware != image_firmware:
+            raise errors.RadioError(f'方案固件 {image_firmware} 与电台 {firmware} 不同，请使用目标电台的方案')
+        if image_size != self.eeprom_size or image_size < self.prog_size:
+            raise errors.RadioError('镜像长度与当前方案不匹配')
+        if self._upload_calibration:
+            raise errors.RadioError('不支持写入校准区域')
+
+    def _read_mem_block(self, pipe, offset, length):
+        profile = self.require_profile()
+        if not 1 <= length <= 128 or offset < 0 or offset + length > self.eeprom_size:
+            raise errors.RadioError('读取地址超出备份范围')
+        if profile.protocol == 'official':
+            command = b'\x1b\x05\x08\x00' + struct.pack('<HBB', offset, length, 0) + b'\x6a\x39\x57\x64'
+            reply_address = offset
+        else:
+            command = readmem_command(offset, length)
+            reply_address = offset >> 16
+        uvk5._send_command(pipe, command)
+        reply = uvk5._receive_reply(pipe)
+        if len(reply) != length + 8 or reply[:2] != b'\x1c\x05' or reply[4:7] != struct.pack('<HB', reply_address, length):
+            raise errors.RadioError(f'读取 0x{offset:04X}：返回地址或长度不匹配')
+        return reply[8:]
+
+    def _write_mem_block(self, pipe, data, offset):
+        if not data or len(data) > self.write_block or offset < 0 or offset + len(data) > self.prog_size:
+            raise errors.RadioError('写入超出信道和基本设置区域')
+        if self.require_profile().protocol == 'official':
+            command = b'\x1d\x05' + struct.pack('<BBHBB', len(data) + 8, 0, offset, len(data), 1) + b'\x6a\x39\x57\x64' + data
+            reply_address = offset
+        else:
+            command = writemem_command(offset, data)
+            reply_address = offset >> 16
+        uvk5._send_command(pipe, command)
+        reply = uvk5._receive_reply(pipe)
+        if len(reply) != 6 or reply[:2] != b'\x1e\x05' or reply[4:6] != struct.pack('<H', reply_address):
+            raise errors.RadioError(f'写入 0x{offset:04X}：确认地址不匹配')
+        return True
+
+    def sync_in(self):
+        self.pipe.timeout = 1.0
+        self.metadata = {'uvk5_firmware': uvk5._sayhello(self.pipe)}
+        self.require_profile()
+        size = self.eeprom_size
+        self._check_download_size(size)
+        status = chirp_common.Status()
+        status.max, status.cur, status.msg = size, 0, '读取配置'
+        self.status_fn(status)
+        data = bytearray()
+        for address in range(0, size, self.read_block):
+            data.extend(self._read_mem_block(self.pipe, address, min(self.read_block, size - address)))
+            status.cur = len(data)
+            self.status_fn(status)
+        self._mmap = memmap.MemoryMapBytes(bytes(data))
+        self.process_mmap()
+
+    def sync_out(self):
+        self.pipe.timeout = 1.0
+        firmware = uvk5._sayhello(self.pipe)
+        self._check_upload_image(len(self.get_mmap()), firmware)
+        status = chirp_common.Status()
+        status.max, status.cur, status.msg = self.prog_size, 0, '写入配置'
+        self.status_fn(status)
+        for address in range(0, self.prog_size, self.write_block):
+            data = self.get_mmap()[address:address + self.write_block]
+            self._write_mem_block(self.pipe, data, address)
+            status.cur = address + len(data)
+            self.status_fn(status)
+        uvk5._resetradio(self.pipe)
+
+    def get_memory(self, number):
+        memory = super().get_memory(number)
+        if not memory.empty:
+            # CHIRP's airband helper translates arbitrary stored frequencies
+            # onto aviation channel designators. LOSEHU/K5Web use the actual
+            # 10 Hz EEPROM value; never change RX merely by editing a name.
+            memory.freq = int(self._memobj.channel[memory.number - 1].freq) * 10
+        return memory
+
+    def validate_memory(self, memory):
+        messages = super().validate_memory(memory)
+        # LOSEHU stores actual RF frequencies (K5Web: raw uint32 / 100000),
+        # including values that are not ICAO 8.33 kHz channel designators.
+        if chirp_common.is_airband(memory.freq):
+            try:
+                chirp_common.fix_rounded_step(memory.freq)
+            except errors.InvalidDataError as error:
+                designator_error = f'{chirp_common.format_freq(memory.freq)}: {error}'
+                messages = [item for item in messages if str(item) != designator_error]
+        if memory.freq % 10 or memory.offset % 10:
+            messages.append(chirp_common.ValidationError('频率精度最多 10 Hz'))
+        return messages
+
+    def encode_channel_name(self, name):
+        return encode_name(name, self.NAME_ENCODING)
+
+    def _decode_name(self, raw):
+        return decode_name(raw, self.NAME_ENCODING)
+
+    def _store_name(self, number, name, original):
+        # An unchanged name retains all 16 bytes, including unknown glyphs or
+        # names longer than the firmware editor permits creating today.
+        if self._decode_name(original) == name.rstrip():
+            self._memobj.channelname[number].set_raw(original)
+            return
+        try:
+            encoded = self.encode_channel_name(name)
+        except UnicodeEncodeError as error:
+            raise errors.InvalidValueError('信道名称含有该固件不支持的字符') from error
+        if len(encoded) > self.NAME_BYTES:
+            raise errors.InvalidValueError(f'信道名称最多 {self.NAME_BYTES} 字节')
+        self._memobj.channelname[number].set_raw(encoded.ljust(16, b'\x00'))
+
     @property
     def basic_settings_supported(self):
-        # Reference capture 131HS and 132 family use the audited layout.
-        return bool(re.fullmatch(r'LOSEHU(?:131HS|132(?:EK|HS|H|K|E)?)',
-                                 self.metadata.get('uvk5_firmware', '')))
+        return bool(self.profile and self.profile.basic_settings)
 
     def get_settings(self):
-        root = super().get_settings()
-        # Geometry is determined by the image; avoid presenting controls which
-        # affect the host driver's runtime rather than EEPROM settings.
-        for item in root[0]:
-            for value in item:
-                value.set_mutable(False)
+        profile = self.require_profile()
+        info = RadioSettingGroup('roinfo', '固件信息')
+        root = RadioSettings(info)
+        labels = {'ascii': '英文字符', 'gb2312': 'GB2312 中文', 'losehu117': '早期中文专用字库'}
+        for key, label, text in (
+                ('fw_ver', '固件版本', self.metadata.get('uvk5_firmware', '')),
+                ('profile', '固件分支', '非扩容版' if profile.protocol == 'official' else '扩容版'),
+                ('names', '名称格式', f'{labels[profile.encoding]} · {self.NAME_BYTES} 字节'),
+                ('backup', '备份范围', f'{self.eeprom_size // 1024} KiB')):
+            value = RadioSettingValueString(0, max(32, len(text)), text, False, charset=text)
+            value.set_mutable(False)
+            info.append(RadioSetting(key, label, value))
         if not self.basic_settings_supported:
             return root
         basic = RadioSettingGroup('losehu_basic', 'LOSEHU 基本设置')

@@ -167,7 +167,7 @@ def apply_memory(radio, data):
             raise ValueError('信道名称超出该型号的长度或字符范围')
     if hasattr(radio, 'NAME_BYTES') and (before is None or name != before['name']):
         try:
-            encoded_name = name.encode(radio.NAME_ENCODING)
+            encoded_name = radio.encode_channel_name(name) if hasattr(radio, 'encode_channel_name') else name.encode(radio.NAME_ENCODING)
         except UnicodeEncodeError as error:
             raise ValueError('信道名称含有不支持的字符') from error
         if len(encoded_name) > radio.NAME_BYTES:

@@ -26,7 +26,7 @@ export function SettingsTree({ nodes, edits, onChange, disabled }: { nodes: Sett
     })}</span></label>)}</>;
 }
 function initial(model:ChirpModel):ChirpDraft {
- try {const saved=localStorage.getItem(chirpStorage(model));if(saved){const draft=parseChirpDraft(saved,model);if(!draft.document.image)return {...draft,document:{...draft.document,features:baselineFeatures(model)}};if(model==='uvk5-losehu')return {...draft,document:{...draft.document,features:{...draft.document.features,nameBytes:13,nameEncoding:'gb2312'}}};return draft;}}catch{/* Keep a damaged saved draft untouched until the user imports a replacement. */}
+ try {const saved=localStorage.getItem(chirpStorage(model));if(saved){const draft=parseChirpDraft(saved,model);if(!draft.document.image)return {...draft,document:{...draft.document,features:baselineFeatures(model)}};if(model==='uvk5-losehu'&&!draft.document.features.nameEncoding)return {...draft,document:{...draft.document,features:{...draft.document.features,nameBytes:13,nameEncoding:'gb2312'}}};return draft;}}catch{/* Keep a damaged saved draft untouched until the user imports a replacement. */}
  return offlineDraft(model);
 }
 export default function ChirpWorkbench({ model, switcher, onBusy, view, onView }: { model:ChirpModel; switcher:ReactNode; onBusy:(busy:boolean)=>void; view:WorkbenchView; onView:(view:WorkbenchView)=>void }) {

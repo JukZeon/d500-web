@@ -83,6 +83,7 @@ export class ChirpRuntime {
         try { await port.setSignals?.({dataTerminalReady:true,requestToSend:true,break:false}); transport=new BrowserRadioPort(port,entry=>this.record(entry)); }
         catch(e){await port.close();throw e;}
         if(request.model==='uv5rh')await transport.prepare();
+        else if(request.model.startsWith('uvk5-'))await transport.prepare(2000,150,3500);
       }
       this.worker??=new Worker('/radio/worker.js',{type:'module'});
       const worker=this.worker, buffer=new SharedArrayBuffer(65544), control=new Int32Array(buffer,0,2);

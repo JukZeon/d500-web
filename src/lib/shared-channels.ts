@@ -24,6 +24,7 @@ export const baselineFeatures = (model: ChirpModel) => structuredClone(capabilit
 /** Cached profiles describe old driver limits. Refresh naming without changing RF capabilities or claiming their IMG was re-decoded. */
 export function currentNameFeatures(model:ChirpModel,saved?:ChirpFeatures):ChirpFeatures {
   if(!saved)return baselineFeatures(model);
+  if(model==='uvk5-losehu'&&saved.nameEncoding)return saved;
   if(model!=='uv5rh'&&model!=='uvk5-losehu')return saved;
   const current=capabilities[model] as ChirpFeatures;
   return {...saved,nameLength:current.nameLength,characters:current.characters,nameBytes:current.nameBytes,nameEncoding:current.nameEncoding};
@@ -111,7 +112,7 @@ export function compatibleName(name: string, model: RadioModel, number: number, 
     for (const char of name) {
       const next = features!.characters.includes(char) ? char : features!.characters.includes(char.toUpperCase()) ? char.toUpperCase() : '';
       if (result.length + next.length > features!.nameLength) break;
-      if(features!.nameBytes){try{encodeName(result+next,features!.nameBytes);}catch{break;}}
+      if(channelNameIssues(result+next,features!).length)break;
       result += next;
     }
   }

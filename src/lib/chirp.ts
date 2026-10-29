@@ -7,7 +7,7 @@ export const RADIO_MODELS = [
   { id: 'd500', label: '即时通 D500', variant: '原版', note: '网页直连' },
   { id: 'uv5r', label: '宝锋 UV-5R', variant: '原厂', note: '128 信道 · 7 位英文名称' },
   { id: 'uv5rh', label: '宝锋 UV-5RH', variant: '普通版', note: '1000 信道 · 多频段' },
-  { id: 'uvk5-losehu', label: '泉盛 UV-K5 / K6', variant: 'LOSEHU', note: '中文名称 · 扩容固件' },
+  { id: 'uvk5-losehu', label: '泉盛 UV-K5 / K6', variant: 'LOSEHU', note: '按固件适配名称与读写' },
   { id: 'uvk5-stock', label: '泉盛 UV-K5 / K6', variant: '原厂', note: '200 信道 · 原厂固件' },
   { id: 'uvk5-egzumer', label: '泉盛 UV-K5 / K6', variant: 'Egzumer', note: '200 信道 · Egzumer 固件' },
 ] as const;
@@ -23,7 +23,7 @@ export interface ChirpChannel {
   group?: string;
   libraryId?: string;
 }
-export interface ChirpFeatures { nameBytes?: number; nameEncoding?: 'gbk' | 'gb2312'; bounds: [number, number]; nameLength: number; characters: string; modes: string[]; bands: [number, number][]; powers: string[]; steps: number[]; skips: string[]; tones: number[]; dtcs: number[]; hasSettings: boolean; hasStep: boolean }
+export interface ChirpFeatures { nameBytes?: number; nameEncoding?: 'gbk' | 'gb2312' | 'ascii' | 'losehu117'; bounds: [number, number]; nameLength: number; characters: string; modes: string[]; bands: [number, number][]; powers: string[]; steps: number[]; skips: string[]; tones: number[]; dtcs: number[]; hasSettings: boolean; hasStep: boolean }
 export interface ChirpDocument { schema: 'radio-workbench-chirp-v1'; model: ChirpModel; driverRevision: string; features: ChirpFeatures; channels: ChirpChannel[]; settings: SettingNode[]; image: string; firmware: string; settingsLimited: boolean; settingsCoverage?: 'basic' | 'channels' | 'driver' }
 export interface ChirpDraft { document: ChirpDocument; channels: ChirpChannel[]; settings: SettingEdits; name: string }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -57,7 +57,12 @@ export function fromD500(channels: Channel[], f: ChirpFeatures): ChirpChannel[] 
 export function channelNameIssues(name:string,f:ChirpFeatures):string[] {
   const issues:string[]=[];
   if(name.length>f.nameLength||[...name].some(char=>!f.characters.includes(char)))issues.push('名称超出长度或字符范围');
-  if(f.nameBytes){try{encodeName(name,f.nameBytes);}catch(e){issues.push((e as Error).message);}}
+  if(f.nameBytes){
+    if(f.nameEncoding==='ascii'||f.nameEncoding==='losehu117'){
+      const length=[...name].reduce((size,char)=>size+(char.codePointAt(0)!<128?1:2),0);
+      if(length>f.nameBytes)issues.push(`名称占 ${length} 字节，最多 ${f.nameBytes} 字节`);
+    }else try{encodeName(name,f.nameBytes);}catch(e){issues.push((e as Error).message);}
+  }
   return issues;
 }
 export function channelIssues(channels: ChirpChannel[], f: ChirpFeatures, original: ChirpChannel[] = []): string[] {

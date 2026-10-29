@@ -5,7 +5,7 @@ import path from 'node:path';
 const root=path.resolve(import.meta.dirname,'..');
 const py=await loadPyodide();
 py.FS.mkdirTree('/radio/vendor');
-for(const file of ['engine.py','losehu.py','uv5rh.py','browser.py','vendor/chirp.zip']) py.FS.writeFile('/radio/'+file,new Uint8Array(await readFile(path.join(root,'radio-core',file))));
+for(const file of ['engine.py','losehu.py', 'losehu_profiles.py','uv5rh.py','browser.py','vendor/chirp.zip']) py.FS.writeFile('/radio/'+file,new Uint8Array(await readFile(path.join(root,'radio-core',file))));
 let writes=[];
 py.registerJsModule('radio_io',{rpc:request=>{const input=JSON.parse(request);if(input.op==='write'){writes.push(input.data);return JSON.stringify({written:input.data.length});}return JSON.stringify({data:[6]});},progress:()=>{}});
 py.runPython(`import sys, time, warnings, logging
@@ -54,3 +54,26 @@ assert r.get_memory(1).name=='ABCD一二三四'
 restored=engine.load_image('uv5rh',engine.image_export(r))
 assert engine.image_bytes(restored)==engine.image_bytes(r)`);
 console.log('uv5rh: WASM GBK names, 12-byte budget, exact re-encode and IMG roundtrip passed');
+
+py.runPython(`from losehu_profiles import profile_for, encode_name, decode_name
+from chirp import memmap
+# A synthetic common image exercises all three profile encodings inside WASM.
+for firmware, name in [('LOSEHU131','TEST'),('LOSEHU132','XINHUI'),('LOSEHU117K','新会中继'),('LOSEHU132EK','TEST'),('LOSEHU131HS','新会中继')]:
+    p=profile_for(firmware)
+    r=engine.LosehuRadio(None)
+    r.metadata={'uvk5_firmware':firmware}
+    r._mmap=memmap.MemoryMapBytes(bytes([255])*p.backup_size)
+    r.process_mmap()
+    m=engine.cc.Memory()
+    m.number=1; m.freq=439125000; m.duplex='off'; m.name=name; m.mode='NFM'; m.extra=[]; m.empty=False
+    r.set_memory(m)
+    assert r.get_memory(1).name==name
+    restored=engine.load_image('uvk5-losehu',engine.image_export(r))
+    assert restored.profile==p
+    assert engine.image_bytes(restored)==engine.image_bytes(r)
+    c=engine.memory_dict(r,r.get_memory(1))
+    before=engine.image_bytes(r)
+    engine.apply_memory(r,c)
+    assert engine.image_bytes(r)==before
+assert decode_name(encode_name('新会中继','losehu117'),'losehu117')=='新会中继'`);
+console.log('losehu: WASM standard 131/132, expanded, English and historical Chinese profiles passed');

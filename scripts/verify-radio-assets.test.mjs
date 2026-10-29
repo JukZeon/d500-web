@@ -10,7 +10,7 @@ function server(change) {
 }
 test('checks the real module MIME contract, including both mjs files', async () => {
   const resources = await verifyRadioAssets('https://example.org/', server());
-  assert.equal(resources.length, 11);
+  assert.equal(resources.length, 12);
   assert.ok(resources.includes('radio/uv5rh.py'));
 });
 test('rejects the production regression: 200 octet-stream for mjs', async () => {

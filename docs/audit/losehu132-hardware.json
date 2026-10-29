@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-29",
+  "firmwareReportedByDevice": "LOSEHU132",
+  "branch": "standard, non-expanded",
+  "baud": 38400,
+  "readBytes": 8192,
+  "activeChannels": 101,
+  "nameEncoding": "ASCII",
+  "newNameBytes": 10,
+  "imageRoundtripDifferences": 0,
+  "allChannelsReencodedDifferences": 0,
+  "browserRealReadConfirmed": true,
+  "browserReadMatchesNativeRead": true,
+  "browserRenamedImageChangedBytes": 7,
+  "browserChangesOnlyInSelectedNameField": true,
+  "browserTestRenameUndone": true,
+  "hardwareEepromWritesSent": 0,
+  "hardwareResetCommandsSent": 0,
+  "note": "Firmware 131 had been recalled by the user; repeated actual handshakes reported 132. This validates reading and file encoding, not hardware upload or every LOSEHU release."
+}

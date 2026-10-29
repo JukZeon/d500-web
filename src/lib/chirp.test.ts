@@ -47,4 +47,14 @@ describe('CHIRP model-aware workspaces',()=>{
     expect(result.channels[0]).toMatchObject({name:'中文',group:'G',libraryId:'one'});expect(result.channels[1].name).toBe('EDITED');expect(result.settings).toEqual(pending.settings);expect(pending.channels[0].name).toBe('OLD-BYTES');
   });
 
+  it('applies ASCII and early LOSEHU font byte limits independently of GBK profiles',()=>{
+    const standard={...f,nameLength:10,nameBytes:10,nameEncoding:'ascii' as const};
+    expect(channelIssues([{...channel,name:'ABCDEFGHIJ'}],standard)).toEqual([]);
+    expect(channelIssues([{...channel,name:'ABCDEFGHIJK'}],standard).length).toBeGreaterThan(0);
+    expect(channelIssues([{...channel,name:'中文'}],standard).length).toBeGreaterThan(0);
+    const legacy={...f,nameLength:13,nameBytes:13,nameEncoding:'losehu117' as const,characters:f.characters+'一二三四五六七'};
+    expect(channelIssues([{...channel,name:'A一二三四五六'}],legacy)).toEqual([]);
+    expect(channelIssues([{...channel,name:'AB一二三四五六'}],legacy).join()).toContain('14 字节');
+  });
+
 });

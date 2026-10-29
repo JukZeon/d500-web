@@ -16,7 +16,7 @@ function rpc(request) {
 async function initialize() {
   const py = await loadPyodide({ indexURL: new URL('./pyodide/', self.location.href).href, stdout: () => {}, stderr: text => self.postMessage({ type: 'diagnostic', text }) });
   py.FS.mkdirTree('/radio/vendor');
-  const files = ['engine.py', 'losehu.py', 'uv5rh.py', 'browser.py', 'vendor/chirp.zip'];
+  const files = ['engine.py', 'losehu.py', 'losehu_profiles.py', 'uv5rh.py', 'browser.py', 'vendor/chirp.zip'];
   for (const name of files) {
     const response = await fetch(new URL(name, self.location.href));
     if (!response.ok) throw new Error(`驱动资源加载失败：${name}`);
