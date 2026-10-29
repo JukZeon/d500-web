@@ -89,3 +89,13 @@ docker exec d500-web wget -q -O - http://127.0.0.1:8080/health
 - 浏览器可使用 Web Serial；服务器无需访问 USB，也不接收配置文件。
 
 仓库不提供公共演示站点或维护者的生产环境配置。
+
+## 内置驱动资源检查
+
+Nginx 默认类型表可能没有 `.mjs`，必须使用仓库配置中的模块类型规则；否则在保留 `nosniff` 的情况下，浏览器会拒绝加载内置驱动。`/radio/` 的缺失资源返回 404，不回退到首页。
+
+部署脚本会检查容器内三个入口模块的返回类型。设置 `D500_PUBLIC_URL` 后，还会检查反向代理后的十个驱动资源及隔离响应头；也可单独运行：
+
+```sh
+node scripts/verify-radio-assets.mjs https://your-host/
+```

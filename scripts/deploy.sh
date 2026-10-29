@@ -24,10 +24,22 @@ mv -Tf current.next current
 docker compose up -d --force-recreate d500-web
 docker exec d500-web nginx -t
 for task_try in {1..15}; do
-  if docker exec d500-web wget -q -O - http://127.0.0.1:8080/health; then exit 0; fi
+  if docker exec d500-web wget -q -O - http://127.0.0.1:8080/health; then
+    for task_module in worker.js pyodide/pyodide.mjs pyodide/pyodide.asm.mjs; do
+      task_headers="$(docker exec d500-web wget -S --spider "http://127.0.0.1:8080/radio/$task_module" 2>&1)"
+      if ! [[ "$task_headers" =~ Content-Type:\ (application|text)/javascript ]]; then
+        echo "Invalid radio module MIME: $task_module" >&2
+        exit 1
+      fi
+    done
+    exit 0
+  fi
   sleep 1
 done
 echo 'Health check failed; the previous release remains available for rollback.' >&2
 exit 1
 REMOTE
+if [ -n "${D500_PUBLIC_URL:-}" ]; then
+  NODE_USE_ENV_PROXY=1 node scripts/verify-radio-assets.mjs "$D500_PUBLIC_URL"
+fi
 echo "Deployed $task_release. Verify /version.json on your configured HTTPS host."
