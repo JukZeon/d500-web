@@ -1,5 +1,6 @@
 import { serialApi, type SerialPortLike, type TraceEntry, hex } from './serial';
 import type { ChirpModel } from './chirp';
+import { version } from '../../package.json';
 export const CHIRP_BAUD: Record<ChirpModel, number> = { uv5r: 9600, uv5rh: 115200, 'uvk5-stock':38400, 'uvk5-losehu':38400, 'uvk5-egzumer':38400 };
 export const directRadioSupported = () => !!serialApi() && globalThis.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined';
 interface IoRequest { op: 'read' | 'write' | 'purge'; size?: number; timeout?: number; data?: number[] }
@@ -56,15 +57,18 @@ export class ChirpRuntime {
   private running=false;
   private id=0;
   readonly trace:TraceEntry[]=[];
+  private record(entry:TraceEntry) { this.trace.push(entry);if(this.trace.length>3000)this.trace.shift(); }
+  private info(text:string) { this.record({at:new Date().toISOString(),direction:'INFO',hex:text}); }
   async execute<T>(request: {action:string;model:ChirpModel;[key:string]:unknown}, progress?: (done:number,total:number)=>void, port?:SerialPortLike):Promise<T> {
     if(this.running) throw new Error('已有电台操作正在进行');
     if(!globalThis.crossOriginIsolated || typeof SharedArrayBuffer==='undefined') throw new Error('页面缺少浏览器隔离支持，请更新部署配置后重新打开');
     this.running=true;
     let transport:BrowserRadioPort|undefined;
     try {
+      if(port) this.info(`${request.action} · ${request.model} · v${version} · ${CHIRP_BAUD[request.model]} 8N1`);
       if(port) {
         await port.open({baudRate:CHIRP_BAUD[request.model],dataBits:8,stopBits:1,parity:'none',flowControl:'none'});
-        try { await port.setSignals?.({dataTerminalReady:true,requestToSend:true,break:false}); transport=new BrowserRadioPort(port,entry=>{this.trace.push(entry);if(this.trace.length>3000)this.trace.shift();}); }
+        try { await port.setSignals?.({dataTerminalReady:true,requestToSend:true,break:false}); transport=new BrowserRadioPort(port,entry=>this.record(entry)); }
         catch(e){await port.close();throw e;}
       }
       this.worker??=new Worker('/radio/worker.js',{type:'module'});
@@ -78,9 +82,10 @@ export class ChirpRuntime {
             void transport.io(data.request).then(finishIo).catch(e=>finishIo({error:(e as Error).message}));
           } else if(data.type==='progress') progress?.(data.done??0,data.total??1);
           else if(data.type==='result') resolve(data.data as T);
-          else if(data.type==='error') reject(new Error(data.error?.split('\n').filter(Boolean).pop()??'驱动执行失败'));
+          else if(data.type==='diagnostic' && data.text) this.info(data.text);
+          else if(data.type==='error') { this.info(data.error??'驱动执行失败');reject(new Error(data.error?.split('\n').filter(Boolean).pop()??'驱动执行失败')); }
         };
-        worker.onerror=event=>{worker.terminate();this.worker=undefined;reject(new Error(event.message||'浏览器驱动加载失败'));};
+        worker.onerror=event=>{const message=event.message||'浏览器驱动加载失败';this.info(message);worker.terminate();this.worker=undefined;reject(new Error(message));};
         worker.postMessage({id:++this.id,request,buffer});
       });
     } finally {

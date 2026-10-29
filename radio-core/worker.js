@@ -1,7 +1,7 @@
 import { loadPyodide } from './pyodide/pyodide.mjs';
 let runtime;
 let mailbox;
-const encoder = new TextEncoder(), decoder = new TextDecoder();
+const decoder = new TextDecoder();
 function rpc(request) {
   const control = new Int32Array(mailbox, 0, 2);
   Atomics.store(control, 0, 0);
@@ -10,7 +10,8 @@ function rpc(request) {
   if (result === 'timed-out') throw new Error('串口操作超时');
   const length = Atomics.load(control, 1);
   if (length < 0 || length > mailbox.byteLength - 8) throw new Error('串口缓冲区异常');
-  return decoder.decode(new Uint8Array(mailbox, 8, length));
+  // Browser TextDecoder rejects shared views; take an ordinary-buffer snapshot.
+  return decoder.decode(new Uint8Array(mailbox, 8, length).slice());
 }
 async function initialize() {
   const py = await loadPyodide({ indexURL: new URL('./pyodide/', self.location.href).href, stdout: () => {}, stderr: text => self.postMessage({ type: 'diagnostic', text }) });
