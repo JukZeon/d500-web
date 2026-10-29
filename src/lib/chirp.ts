@@ -54,6 +54,12 @@ export function fromD500(channels: Channel[], f: ChirpFeatures): ChirpChannel[] 
     mode: c.bandwidth === 'narrow' ? 'NFM' : 'FM', power: f.powers.find(p => p.toLowerCase() === c.power) ?? f.powers[0],
     skip: c.scanAdd ? '' : f.skips.includes('S') ? 'S' : '', comment: [c.group, c.note].filter(Boolean).join(' / ') }));
 }
+export function channelNameIssues(name:string,f:ChirpFeatures):string[] {
+  const issues:string[]=[];
+  if(name.length>f.nameLength||[...name].some(char=>!f.characters.includes(char)))issues.push('名称超出长度或字符范围');
+  if(f.nameBytes){try{encodeName(name,f.nameBytes);}catch(e){issues.push((e as Error).message);}}
+  return issues;
+}
 export function channelIssues(channels: ChirpChannel[], f: ChirpFeatures, original: ChirpChannel[] = []): string[] {
   const issues: string[] = [], used = new Set<number>();
   for (const c of channels) {
@@ -61,8 +67,7 @@ export function channelIssues(channels: ChirpChannel[], f: ChirpFeatures, origin
     used.add(c.number);
     if (!Number.isInteger(c.number) || c.number < f.bounds[0] || c.number > f.bounds[1]) issues.push(`信道 ${c.number} 超出编号范围`);
     if (c.empty) continue;
-    if (!original.some(old => old.number === c.number && old.name === c.name) && (c.name.length > f.nameLength || [...c.name].some(char => !f.characters.includes(char)))) issues.push(`信道 ${c.number} 名称超出长度或字符范围`);
-    if (f.nameBytes && !original.some(old => old.number === c.number && old.name === c.name)) { try { encodeName(c.name,f.nameBytes); } catch(e) { issues.push(`信道 ${c.number} ${(e as Error).message}`); } }
+    if (!original.some(old => old.number === c.number && old.name === c.name))issues.push(...channelNameIssues(c.name,f).map(issue=>`信道 ${c.number} ${issue}`));
     if (!Number.isFinite(Number(c.rx)) || Number(c.rx) <= 0 || !f.bands.some(([lo, hi]) => Number(c.rx) * 1e6 >= lo && Number(c.rx) * 1e6 < hi)) issues.push(`信道 ${c.number} 接收频率超出范围`);
     if (c.tx && (!Number.isFinite(Number(c.tx)) || Number(c.tx) <= 0)) issues.push(`信道 ${c.number} 发射频率无效`);
     else if (c.tx && !f.bands.some(([lo,hi]) => Number(c.tx)*1e6>=lo && Number(c.tx)*1e6<hi)) issues.push(`信道 ${c.number} 发射频率超出范围`);

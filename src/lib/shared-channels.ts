@@ -1,6 +1,6 @@
 import capabilities from './radio-capabilities.json';
 import { type Channel, type Workspace, newChannel } from './model';
-import { type ChirpChannel, type ChirpDocument, type ChirpDraft, type ChirpFeatures, type ChirpModel, type RadioModel, makeChirpChannel, channelIssues, RADIO_MODELS } from './chirp';
+import { type ChirpChannel, type ChirpDocument, type ChirpDraft, type ChirpFeatures, type ChirpModel, type RadioModel, makeChirpChannel, channelIssues, channelNameIssues, RADIO_MODELS } from './chirp';
 import { encodeName } from './encoding';
 import { validateChannels } from './dat';
 
@@ -13,7 +13,7 @@ export interface ManagedChannel {
 export interface ChannelLibrary { schema: 'radio-channel-library-v1'; channels: ManagedChannel[]; updatedAt: string }
 export type TransferMode = 'sync' | 'append' | 'merge' | 'replace';
 export interface TransferRow { source: ManagedChannel; channel: ManagedChannel; errors: string[]; warnings: string[]; overwrites: boolean }
-export interface TransferOptions { mode: TransferMode; start?: number; names?: Record<string, string> }
+export interface TransferOptions { mode: TransferMode; start?: number; names?: Record<string, string>; nameMode?: 'full' | 'aliases' }
 export const D500_STORAGE = 'ba7ktc-d500-workspace-v1';
 export const LIBRARY_STORAGE = 'radio-workbench-library-v1';
 export const chirpStorage = (model: ChirpModel) => `ba7ktc-chirp-${model}-v1`;
@@ -21,6 +21,13 @@ export const emptyLibrary = (): ChannelLibrary => ({ schema: 'radio-channel-libr
 export const canonicalPower = (power: string) => /^(medium|med|mid)$/i.test(power) ? 'medium' : power.toLowerCase();
 export const nativePower = (power: string, f: ChirpFeatures) => f.powers.find(p => canonicalPower(p) === canonicalPower(power)) ?? power;
 export const baselineFeatures = (model: ChirpModel) => structuredClone(capabilities[model]) as ChirpFeatures;
+/** Cached profiles describe old driver limits. Refresh naming without changing RF capabilities or claiming their IMG was re-decoded. */
+export function currentNameFeatures(model:ChirpModel,saved?:ChirpFeatures):ChirpFeatures {
+  if(!saved)return baselineFeatures(model);
+  if(model!=='uv5rh'&&model!=='uvk5-losehu')return saved;
+  const current=capabilities[model] as ChirpFeatures;
+  return {...saved,nameLength:current.nameLength,characters:current.characters,nameBytes:current.nameBytes,nameEncoding:current.nameEncoding};
+}
 export const boundsFor = (model: RadioModel, features?: ChirpFeatures): [number, number] => model === 'd500' ? [0, 199] : (features ?? baselineFeatures(model)).bounds;
 export function offlineDraft(model: ChirpModel): ChirpDraft {
   const document: ChirpDocument = { schema: 'radio-workbench-chirp-v1', model, driverRevision: 'offline', features: baselineFeatures(model), channels: [], settings: [], image: '', firmware: '', settingsLimited: model === 'uvk5-losehu' };
@@ -81,29 +88,29 @@ export function rowIssues(row: ManagedChannel, model: RadioModel | 'library', f?
     if (!['FM', 'NFM'].includes(row.mode)) issues.push(`不支持 ${row.mode}`);
     return issues;
   }
-  const features = f ?? baselineFeatures(model);
+  const features = currentNameFeatures(model,f);
   return channelIssues([chirpChannel(row, features)], features, original).map(s => s.replace(/^信道 \d+ /, ''));
 }
 export function compatibleName(name: string, model: RadioModel, number: number, f?: ChirpFeatures): string {
   let result = '';
+  const features=model==='d500'?undefined:currentNameFeatures(model,f);
   if (model === 'd500') {
     for (const char of name) { try { encodeName(result + char); result += char; } catch { break; } }
   } else {
-    const features = f ?? baselineFeatures(model);
     for (const char of name) {
-      const next = features.characters.includes(char) ? char : features.characters.includes(char.toUpperCase()) ? char.toUpperCase() : '';
-      if (result.length + next.length > features.nameLength) break;
-      if(features.nameBytes){try{encodeName(result+next,features.nameBytes);}catch{break;}}
+      const next = features!.characters.includes(char) ? char : features!.characters.includes(char.toUpperCase()) ? char.toUpperCase() : '';
+      if (result.length + next.length > features!.nameLength) break;
+      if(features!.nameBytes){try{encodeName(result+next,features!.nameBytes);}catch{break;}}
       result += next;
     }
   }
-  if(model!=='d500'&&result.trim()&&result.length<3&&[...name].some(char=>!(f??baselineFeatures(model)).characters.includes(char))){
-    result=(result+String(number).padStart(3,'0')).slice(0,(f??baselineFeatures(model)).nameLength);
+  if(features&&result.trim()&&result.length<3&&[...name].some(char=>!features.characters.includes(char))){
+    result=(result+String(number).padStart(3,'0')).slice(0,features.nameLength);
   }
   return result.trim() || `CH${String(number).padStart(3, '0')}`;
 }
 export function planTransfer(source: ManagedChannel[], model: RadioModel, target: ManagedChannel[], options: TransferOptions, features?: ChirpFeatures): TransferRow[] {
-  const f = model === 'd500' ? undefined : features ?? baselineFeatures(model), [lo, hi] = boundsFor(model, f);
+  const f = model === 'd500' ? undefined : currentNameFeatures(model,features), [lo, hi] = boundsFor(model, f);
   const occupied = new Set(target.map(c => c.number)), planned = new Set<number>();
   let cursor = options.start ?? lo;
   return source.map(row => {
@@ -117,7 +124,11 @@ export function planTransfer(source: ManagedChannel[], model: RadioModel, target
       else {while (occupied.has(cursor) && cursor <= hi) cursor++; number = cursor++;}
     }
     else number = row.number - (row.numberBase ?? (row.sourceModel ? boundsFor(row.sourceModel)[0] : 1)) + lo;
-    const channel = { ...row, id: `${model}:${number}`, number, name: options.names?.[row.id] ?? row.aliases?.[model] ?? row.name, power: canonicalPower(row.power), sourceModel: model, libraryId:row.libraryId ?? (!RADIO_MODELS.some(m=>row.id.startsWith(m.id+':')) ? row.id : undefined) };
+    let fullNameFits=false;
+    if(f)fullNameFits=!channelNameIssues(row.name,f).length;
+    else try{encodeName(row.name);fullNameFits=true;}catch{/* Keep the full name visible unless a saved alias can be used. */}
+    const name=options.names?.[row.id]??(options.nameMode==='aliases'||!fullNameFits?row.aliases?.[model]??row.name:row.name);
+    const channel = { ...row, id: `${model}:${number}`, number, name, power: canonicalPower(row.power), sourceModel: model, libraryId:row.libraryId ?? (!RADIO_MODELS.some(m=>row.id.startsWith(m.id+':')) ? row.id : undefined) };
     const powers = model === 'd500' ? ['high', 'low'] : f!.powers.map(canonicalPower);
     if (!powers.includes(channel.power)) { channel.power = powers.includes('low') ? 'low' : powers[0]; if(row.power)warnings.push(`功率 ${row.power} → ${channel.power}`); }
     if (f && !f.steps.includes(channel.step)) { channel.step = f.steps[0] ?? 5; if (f.hasStep) warnings.push(`步进 → ${channel.step} kHz`); }

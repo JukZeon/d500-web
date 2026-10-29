@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { editedChannels, makeChirpChannel } from './chirp';
 import { emptyWorkspace, newChannel } from './model';
 import { parseProject } from './project';
-import { applyChirpTransfer, applyD500Transfer, baselineFeatures, channelIdentity, compatibleName, d500Channel, emptyLibrary, managedChirp, managedD500, mergeLibrary, offlineDraft, parseLibrary, planTransfer, replaceChirpChannels, type ManagedChannel } from './shared-channels';
+import { applyChirpTransfer, applyD500Transfer, baselineFeatures, channelIdentity, compatibleName, currentNameFeatures, d500Channel, emptyLibrary, managedChirp, managedD500, mergeLibrary, offlineDraft, parseLibrary, planTransfer, replaceChirpChannels, type ManagedChannel } from './shared-channels';
 const row=(number=0):ManagedChannel=>({...managedD500([{...newChannel(number),name:'A中继',rx:'439.12500',tx:'434.12500',rxTone:'D023I',txTone:'88.5',group:'广州'}])[0]});
 describe('shared channel library and cross-model plans',()=>{
  it('normalizes frequency precision and DCS polarity without combining different tones',()=>{
@@ -140,6 +140,24 @@ describe('shared channel library and cross-model plans',()=>{
   expect(plan[0].errors).toEqual([]);expect(plan[0].channel.name).toBe('中文名称测试');
   expect(compatibleName('一二三四五六七','uv5rh',1)).toBe('一二三四五六');
   expect(compatibleName('一二三四五六七','uvk5-losehu',1)).toBe('一二三四五六');
+ });
+
+ it('uses Chinese library names despite an inactive profile caching the old ASCII driver limits',()=>{
+  const current=baselineFeatures('uv5rh'),stale={...current,characters:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',nameEncoding:undefined,nameBytes:undefined,bands:[[430000000,440000000]] as [number,number][]};
+  const source={...row(),name:'广州越秀金沙',aliases:{uv5rh:'GZ005'}};
+  const plan=planTransfer([source],'uv5rh',[],{mode:'append'},stale);
+  expect(plan[0].channel.name).toBe(source.name);expect(plan[0].errors).toEqual([]);
+  expect(compatibleName(source.name,'uv5rh',1,stale)).toBe(source.name);
+  expect(currentNameFeatures('uv5rh',stale).bands).toBe(stale.bands);
+  expect(stale.nameEncoding).toBeUndefined();expect(source.aliases.uv5rh).toBe('GZ005');
+ });
+ it('offers saved aliases explicitly while manual names always take priority',()=>{
+  const source={...row(),name:'广州中继',aliases:{uv5rh:'GZ-A'}};
+  expect(planTransfer([source],'uv5rh',[],{mode:'append',nameMode:'aliases'})[0].channel.name).toBe('GZ-A');
+  expect(planTransfer([source],'uv5rh',[],{mode:'append',nameMode:'aliases',names:{[source.id]:'中文名称'}})[0].channel.name).toBe('中文名称');
+  const tooLong={...source,name:'一二三四五六七'};
+  expect(planTransfer([tooLong],'uv5rh',[],{mode:'append'})[0].channel.name).toBe('GZ-A');
+  expect(planTransfer([{...tooLong,aliases:undefined}],'uv5rh',[],{mode:'append'})[0].errors.join()).toContain('12 字节');
  });
 
 });

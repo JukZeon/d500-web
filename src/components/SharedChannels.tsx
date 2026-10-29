@@ -4,7 +4,7 @@ import { RADIO_MODELS, parseChirpDraft, type RadioModel } from '../lib/chirp';
 import { emptyWorkspace } from '../lib/model';
 import { download, parseProject } from '../lib/project';
 import { useAutosave } from '../lib/use-autosave';
-import { D500_STORAGE, LIBRARY_STORAGE, applyChirpTransfer, applyD500Transfer, boundsFor, channelIdentity, chirpStorage, compatibleName, emptyLibrary, managedChirp, managedD500, mergeLibrary, offlineDraft, parseLibrary, planTransfer, type ChannelLibrary, type ManagedChannel, type TransferMode } from '../lib/shared-channels';
+import { D500_STORAGE, LIBRARY_STORAGE, applyChirpTransfer, applyD500Transfer, boundsFor, channelIdentity, chirpStorage, compatibleName, currentNameFeatures, emptyLibrary, managedChirp, managedD500, mergeLibrary, offlineDraft, parseLibrary, planTransfer, type ChannelLibrary, type ManagedChannel, type TransferMode } from '../lib/shared-channels';
 import ChannelEditor from './ChannelEditor';
 import WorkbenchDialog from './WorkbenchDialog';
 import { parseDat } from '../lib/dat';
@@ -17,7 +17,7 @@ function storedProfile(model:RadioModel):ProfileAccess{
   return {name:workspace.name,channels:managedD500(workspace.channels),apply:(rows,mode)=>localStorage.setItem(D500_STORAGE,JSON.stringify(applyD500Transfer(workspace,rows,mode)))};
  }
  const saved=localStorage.getItem(chirpStorage(model)),draft=saved?parseChirpDraft(saved,model):offlineDraft(model);
- return {name:draft.name,channels:managedChirp(draft.channels,model),features:draft.document.features,apply:(rows,mode)=>localStorage.setItem(chirpStorage(model),JSON.stringify(applyChirpTransfer(draft,rows,mode)))};
+ return {name:draft.name,channels:managedChirp(draft.channels,model),features:currentNameFeatures(model,draft.document.features),apply:(rows,mode)=>localStorage.setItem(chirpStorage(model),JSON.stringify(applyChirpTransfer(draft,rows,mode)))};
 }
 function initialLibrary():ChannelLibrary{
  try{
@@ -35,7 +35,7 @@ function initialLibrary():ChannelLibrary{
 }
 export function SharedChannelsProvider({children,currentModel}:{children:ReactNode;currentModel:RadioModel}){
  const [library,setLibrary]=useState(initialLibrary),[source,setSource]=useState<ManagedChannel[]|null>(null),[notice,setNotice]=useState('');
- const [target,setTarget]=useState<RadioModel>(currentModel),[mode,setMode]=useState<TransferMode>('sync'),[start,setStart]=useState(0),[names,setNames]=useState<Record<string,string>>({}),[skip,setSkip]=useState(false),[error,setError]=useState('');
+ const [target,setTarget]=useState<RadioModel>(currentModel),[mode,setMode]=useState<TransferMode>('sync'),[start,setStart]=useState(0),[names,setNames]=useState<Record<string,string>>({}),[skip,setSkip]=useState(false),[error,setError]=useState(''),[nameMode,setNameMode]=useState<'full'|'aliases'>('full');
  const access=useRef(new Map<RadioModel,()=>ProfileAccess>());
  const saving=useAutosave(LIBRARY_STORAGE,library);
  const register=useCallback((model:RadioModel,read:()=>ProfileAccess)=>{access.current.set(model,read);return()=>{if(access.current.get(model)===read)access.current.delete(model);};},[]);
@@ -44,11 +44,11 @@ export function SharedChannelsProvider({children,currentModel}:{children:ReactNo
  const transfer=useCallback((rows:ManagedChannel[])=>{
   const next=currentModel;
   setSource(rows.map(row=>{const entry=library.channels.find(c=>c.id===row.id||c.id===row.libraryId||channelIdentity(c)===channelIdentity(row));return {...row,libraryId:entry?.id??row.libraryId,aliases:entry?.aliases??row.aliases};}));
-  setTarget(next);setStart(boundsFor(next)[0]);setMode('sync');setNames({});setSkip(false);setError('');
+  setTarget(next);setStart(boundsFor(next)[0]);setMode('sync');setNameMode('full');setNames({});setSkip(false);setError('');
  },[currentModel,library]);
  let profile:ProfileAccess|undefined,loadError='';
  if(source)try{profile=access.current.get(target)?.()??storedProfile(target);}catch(e){loadError='目标方案无法读取：'+(e as Error).message;}
- const plan=source&&profile?planTransfer(source,target,profile.channels,{mode,start,names},profile.features):[];
+ const plan=source&&profile?planTransfer(source,target,profile.channels,{mode,start,names,nameMode},profile.features):[];
  const bad=plan.filter(row=>row.errors.length),ready=plan.filter(row=>!row.errors.length);
  const [lo,hi]=boundsFor(target,profile?.features);
  useEffect(()=>{if(!notice)return;const timer=setTimeout(()=>setNotice(''),4500);return()=>clearTimeout(timer);},[notice]);
@@ -64,7 +64,7 @@ export function SharedChannelsProvider({children,currentModel}:{children:ReactNo
  }
  const context=useMemo(()=>({library,update,store,transfer,register}),[library,update,store,transfer,register]);
  return <SharedContext.Provider value={context}>{children}{notice&&<div className="toast" role="status"><Check size={17}/>{notice}<button aria-label="关闭提示" onClick={()=>setNotice('')}><X size={15}/></button></div>}{saving.startsWith('存储已满')&&<div className="toast error" role="alert">{saving}</div>}
- {source&&<WorkbenchDialog label="应用信道到电台方案" className="transfer-modal" onClose={()=>setSource(null)}><header><div><h2>应用到电台方案</h2><p>{source.length} 条信道</p></div><button className="icon-btn" aria-label="关闭信道应用" onClick={()=>setSource(null)}><X size={19}/></button></header><div className="transfer-controls"><label>目标电台<select aria-label="目标电台" value={target} onChange={e=>{const model=e.target.value as RadioModel;setTarget(model);setStart(boundsFor(model)[0]);setNames({});setError('');}}>{RADIO_MODELS.map(m=><option key={m.id} value={m.id}>{m.label} · {m.variant}</option>)}</select></label><label>应用方式<select aria-label="应用方式" value={mode} onChange={e=>setMode(e.target.value as TransferMode)}><option value="sync">更新关联信道，其余追加</option><option value="append">追加到空位</option><option value="merge">按编号合并</option><option value="replace">替换全部信道</option></select></label>{(mode==='append'||mode==='sync')&&<label>从编号开始<input aria-label="起始编号" type="number" min={lo} max={hi} value={start} onChange={e=>setStart(Number(e.target.value))}/></label>}</div>
+ {source&&<WorkbenchDialog label="应用信道到电台方案" className="transfer-modal" onClose={()=>setSource(null)}><header><div><h2>应用到电台方案</h2><p>{source.length} 条信道</p></div><button className="icon-btn" aria-label="关闭信道应用" onClick={()=>setSource(null)}><X size={19}/></button></header><div className="transfer-controls"><label>目标电台<select aria-label="目标电台" value={target} onChange={e=>{const model=e.target.value as RadioModel;setTarget(model);setStart(boundsFor(model)[0]);setNames({});setError('');}}>{RADIO_MODELS.map(m=><option key={m.id} value={m.id}>{m.label} · {m.variant}</option>)}</select></label><label>应用方式<select aria-label="应用方式" value={mode} onChange={e=>setMode(e.target.value as TransferMode)}><option value="sync">更新关联信道，其余追加</option><option value="append">追加到空位</option><option value="merge">按编号合并</option><option value="replace">替换全部信道</option></select></label><label>名称<select aria-label="名称方式" value={nameMode} onChange={e=>{setNameMode(e.target.value as 'full'|'aliases');setNames({});}}><option value="full">优先完整名称</option><option value="aliases">使用机型别名</option></select></label>{(mode==='append'||mode==='sync')&&<label>从编号开始<input aria-label="起始编号" type="number" min={lo} max={hi} value={start} onChange={e=>setStart(Number(e.target.value))}/></label>}</div>
  <div className="transfer-summary"><span>{profile?.name??'目标方案'} · {lo}–{hi}</span><strong>{ready.length} 条可用{bad.length?` · ${bad.length} 条待调整`:''}</strong><button className="text-btn" onClick={()=>setNames(Object.fromEntries(plan.map(row=>[row.source.id,compatibleName(row.source.name,target,row.channel.number,profile?.features)])))}>生成兼容名称</button></div>
  {mode==='replace'&&<p className="inline-error">目标方案的全部信道将替换为本次列表，整机设置保留。</p>}{(error||loadError)&&<p role="alert" className="inline-error">{error||loadError}</p>}
  <div className="transfer-preview"><table><thead><tr><th>原名称</th><th/><th>目标编号</th><th>机型名称</th><th>接收 / 发射 MHz</th><th>检查</th></tr></thead><tbody>{plan.slice(0,200).map((row,i)=><tr key={`${row.source.id}:${i}`} className={row.errors.length?'row-error':''}><td>{row.source.name||'未命名'}</td><td><ArrowRight size={13}/></td><td className="mono">{String(row.channel.number).padStart(3,'0')}</td><td><input aria-label={`目标名称 ${i+1}`} value={row.channel.name} onChange={e=>setNames({...names,[row.source.id]:e.target.value})}/></td><td className="mono">{row.channel.rx}<br/>{row.channel.tx||'仅接收'}</td><td>{row.errors.length?row.errors.join('；'):[...row.warnings,...(row.overwrites?['覆盖同编号']:[])].join('；')||'可用'}</td></tr>)}</tbody></table>{plan.length>200&&<p className="import-note">预览前 200 条，检查和应用包含全部 {plan.length} 条。</p>}</div><div className="transfer-options">{bad.length>0&&<label className="check-label"><input type="checkbox" checked={skip} onChange={e=>setSkip(e.target.checked)}/>跳过不兼容信道</label>}<span className="chirp-muted">只更新方案</span></div><div className="modal-actions"><button className="btn" onClick={()=>setSource(null)}>取消</button><button className="btn primary" disabled={!ready.length||!!loadError||(bad.length>0&&!skip)} onClick={apply}>应用 {ready.length} 条</button></div></WorkbenchDialog>}
