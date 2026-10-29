@@ -1,3 +1,4 @@
+import { readSpreadsheet } from './sheet-input';
 import * as XLSX from 'xlsx';
 import { type Channel, type Power, newChannel, slotLabel, PTT_OPTIONS, SIGNAL_OPTIONS, MUTE_OPTIONS } from './model';
 import { validateChannels } from './dat';
@@ -74,7 +75,7 @@ function enumValue(value: unknown, options: string[], label: string): number {
 export interface WorkbookImport { channels: Channel[]; sheetName: string; warnings: string[]; detected: string; providedFields: string[] }
 export function importWorkbook(data: ArrayBuffer, fileName: string): WorkbookImport {
   if (data.byteLength > 8 * 1024 * 1024) throw new Error('表格超过 8 MB');
-  const book = XLSX.read(data, { type: 'array', cellFormula: false, cellHTML: false, sheetRows: 1200 });
+  const book = readSpreadsheet(data, { cellFormula: false, cellHTML: false, sheetRows: 1200 });
   for (const sheetName of book.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[sheetName], { header: 1, defval: '', raw: true });
     let columns: Partial<Record<Field, number>> = {}, head = -1;

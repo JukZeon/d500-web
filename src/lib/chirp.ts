@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { readSpreadsheet } from './sheet-input';
 import type { Channel } from './model';
 
 export const RADIO_MODELS = [
@@ -18,6 +19,8 @@ export interface ChirpChannel {
   number: number; name: string; rx: string; tx: string; rxTone: string; txTone: string;
   mode: string; power: string; skip: string; step: number; comment: string; extra: SettingNode[];
   empty?: boolean; extraEdits?: SettingEdits;
+  group?: string;
+  libraryId?: string;
 }
 export interface ChirpFeatures { bounds: [number, number]; nameLength: number; characters: string; modes: string[]; bands: [number, number][]; powers: string[]; steps: number[]; skips: string[]; tones: number[]; dtcs: number[]; hasSettings: boolean; hasStep: boolean }
 export interface ChirpDocument { schema: 'radio-workbench-chirp-v1'; model: ChirpModel; driverRevision: string; features: ChirpFeatures; channels: ChirpChannel[]; settings: SettingNode[]; image: string; firmware: string; settingsLimited: boolean; settingsCoverage?: 'basic' | 'channels' | 'driver' }
@@ -32,7 +35,7 @@ export function isChirpDocument(value: unknown): value is ChirpDocument {
   const f = value.features;
   return Array.isArray(f.bounds) && f.bounds.length === 2 && f.bounds.every(Number.isInteger) && Number(f.bounds[0]) >= 0 && Number(f.bounds[0]) <= Number(f.bounds[1]) && Number(f.bounds[1]) <= 1000 &&
     ['modes', 'powers', 'steps', 'skips', 'tones', 'dtcs', 'bands'].every(k => Array.isArray(f[k])) && typeof f.nameLength === 'number' && typeof f.characters === 'string' && typeof f.hasStep === 'boolean' && ['modes','powers','skips'].every(k => (f[k] as unknown[]).every(v => typeof v === 'string')) &&
-    value.channels.every(c => object(c) && Number.isInteger(c.number) && ['name','rx','tx','rxTone','txTone','mode','power','skip','comment'].every(k => typeof c[k] === 'string') && typeof c.step === 'number' && validNodes(c.extra) && (c.empty === undefined || typeof c.empty === 'boolean'));
+    value.channels.every(c => object(c) && Number.isInteger(c.number) && ['name','rx','tx','rxTone','txTone','mode','power','skip','comment'].every(k => typeof c[k] === 'string') && typeof c.step === 'number' && validNodes(c.extra) && (c.empty === undefined || typeof c.empty === 'boolean') && (c.group === undefined || typeof c.group === 'string' && c.group.length <= 2000) && (c.libraryId === undefined || typeof c.libraryId === 'string' && c.libraryId.length <= 100));
 }
 export function parseChirpDraft(text: string, model: ChirpModel): ChirpDraft {
   const v: unknown = JSON.parse(text);
@@ -60,23 +63,29 @@ export function channelIssues(channels: ChirpChannel[], f: ChirpFeatures, origin
     if (!original.some(old => old.number === c.number && old.name === c.name) && (c.name.length > f.nameLength || [...c.name].some(char => !f.characters.includes(char)))) issues.push(`信道 ${c.number} 名称超出长度或字符范围`);
     if (!Number.isFinite(Number(c.rx)) || Number(c.rx) <= 0 || !f.bands.some(([lo, hi]) => Number(c.rx) * 1e6 >= lo && Number(c.rx) * 1e6 < hi)) issues.push(`信道 ${c.number} 接收频率超出范围`);
     if (c.tx && (!Number.isFinite(Number(c.tx)) || Number(c.tx) <= 0)) issues.push(`信道 ${c.number} 发射频率无效`);
+    else if (c.tx && !f.bands.some(([lo,hi]) => Number(c.tx)*1e6>=lo && Number(c.tx)*1e6<hi)) issues.push(`信道 ${c.number} 发射频率超出范围`);
     if (!f.modes.includes(c.mode)) issues.push(`信道 ${c.number} 不支持 ${c.mode}`);
     if (c.power && !f.powers.includes(c.power)) issues.push(`信道 ${c.number} 功率无效`);
-    for (const tone of [c.rxTone, c.txTone]) if (tone && !/^D\d{3}[NR]$/.test(tone) && !/^\d+(\.\d+)?$/.test(tone)) issues.push(`信道 ${c.number} 哑音格式无效`);
+    for (const tone of [c.rxTone, c.txTone]) {
+      if (tone && !/^D\d{3}[NR]$/.test(tone) && !/^\d+(\.\d+)?$/.test(tone)) issues.push(`信道 ${c.number} 哑音格式无效`);
+      else if (/^D/.test(tone) && !f.dtcs.includes(Number(tone.slice(1,-1)))) issues.push(`信道 ${c.number} 不支持 ${tone}`);
+      else if (tone && !/^D/.test(tone) && !f.tones.includes(Number(tone))) issues.push(`信道 ${c.number} 不支持哑音 ${tone}`);
+    }
   }
   return [...new Set(issues)];
 }
 export function editedChannels(draft: ChirpDraft): ChirpChannel[] {
   const before = new Map(draft.document.channels.map(c => [c.number, c]));
-  return draft.channels.filter(c => JSON.stringify(c) !== JSON.stringify(before.get(c.number)));
+  const radioFields = (c: ChirpChannel | undefined) => c && [c.number,c.name,c.rx,c.tx,c.rxTone,c.txTone,c.mode,c.power,c.skip,c.step,c.comment,!!c.empty,c.extra,c.extraEdits??{}];
+  return draft.channels.filter(c => c.empty ? before.has(c.number) : JSON.stringify(radioFields(c)) !== JSON.stringify(radioFields(before.get(c.number))));
 }
 export function importChirpTable(data: ArrayBuffer, f: ChirpFeatures): ChirpChannel[] {
-  const book = XLSX.read(data, { type: 'array' });
+  const book = readSpreadsheet(data, { cellFormula:false, cellHTML:false, sheetRows:f.bounds[1]-f.bounds[0]+22 });
   const normalize = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/[\s()（）_\-/]/g, '');
   const aliases = {
     number: ['number', 'location', '信道编号', '信道号', '序号', '信道编号0199'], name: ['name', '名称', '信道名称'],
     rx: ['rx', 'frequency', '接收频率', '接收频率mhz', '频率'], tx: ['tx', '发射频率', '发射频率mhz'],
-    rxTone: ['rxtone', '接收哑音', '接收亚音', '接收亚音频hz'], txTone: ['txtone', '发射哑音', '发射亚音', '发送亚音频hz'],
+    rxTone: ['rxtone', '接收哑音', '接收亚音', '接收亚音频hz'], txTone: ['txtone', '发射哑音', '发射亚音', '发送亚音频hz'], group: ['group','分组','地区','分区'],
     rxType: ['接收亚音类型','接收亚音频类型','rxtonetype'], txType:['发送亚音类型','发射亚音类型','txtonetype'], rxDcs:['接收亚音数码','rxdcs'], txDcs:['发送亚音数码','发射亚音数码','txdcs'], mode: ['mode', '模式', '带宽'], power: ['power', '功率'], comment: ['comment', '备注'],
   };
   for (const sheet of book.SheetNames) {
@@ -91,6 +100,7 @@ export function importChirpTable(data: ArrayBuffer, f: ChirpFeatures): ChirpChan
       if (columns.tx < 0) throw new Error('缺少发射频率列；接收专用信道可保留空单元格');
       const c = makeChirpChannel(n ? Number(n) : f.bounds[0] + i, f);
       for (const k of ['name', 'rx', 'tx', 'rxTone', 'txTone', 'comment'] as const) if (columns[k] >= 0) c[k] = k.endsWith('Tone') ? get(row, k).replace(/I$/, 'R') : get(row, k);
+      if (columns.group >= 0) c.group = get(row, 'group');
       for (const side of ['rx', 'tx'] as const) {
         const type = get(row, side + 'Type').toUpperCase(), code = get(row, side + 'Dcs').toUpperCase();
         if (['关闭','OFF','NONE','无','0'].includes(type)) c[`${side}Tone`] = '';

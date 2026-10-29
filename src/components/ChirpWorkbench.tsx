@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Cable, Download, GitBranch, Plus, Radio, Save, Search, Settings2, Trash2, Undo2, Upload } from 'lucide-react';
-import { RADIO_MODELS, channelIssues, editedChannels, fromD500, importChirpTable, isChirpDocument, makeChirpChannel, parseChirpDraft, type ChirpModel, type ChirpDraft, type ChirpDocument, type ChirpChannel,  type SettingEdits, type SettingNode } from '../lib/chirp';
+import { Cable, Download, FileCode2, FileSpreadsheet, GitBranch, HardDrive, Library, Menu, Plus, Save, Upload, X } from 'lucide-react';
+import { RADIO_MODELS, channelIssues, editedChannels, importChirpTable, isChirpDocument, parseChirpDraft, type ChirpModel, type ChirpDraft, type ChirpDocument, type ChirpChannel, type SettingEdits, type SettingNode } from '../lib/chirp';
 import { download, parseProject } from '../lib/project';
+import { parseDat } from '../lib/dat';
 import { ChirpRuntime, directRadioSupported } from '../lib/chirp-runtime';
 import { serialApi, type SerialPortLike } from '../lib/serial';
-
+import { useAutosave } from '../lib/use-autosave';
+import { applyChirpTransfer, channelIdentity, chirpStorage, managedChirp, managedD500, offlineDraft, parseLibrary, replaceChirpChannels } from '../lib/shared-channels';
+import ChannelEditor from './ChannelEditor';
+import { useSharedProfile } from '../lib/shared-context';
+import WorkspaceNav, { VIEW_LABELS, type WorkbenchView } from './WorkspaceNav';
+import { SharedLibraryPanel } from './SharedChannels';
+import FrequencyPanel from './FrequencyPanel';
+import WorkbenchDialog from './WorkbenchDialog';
 const LABELS: Record<string, string> = {
   'Limits disabled for modified firmware': '扩展频段', 'High': '高', 'Low': '低', 'Medium': '中', 'Med': '中', 'Off': '关闭', 'On': '开启',
   'Basic Settings': '基本设置', 'Advanced Settings': '高级设置', 'Other Settings': '其他设置', 'Work Mode Settings': '工作模式',
@@ -15,11 +23,6 @@ const LABELS: Record<string, string> = {
   'Keypad Lock': '键盘锁', 'Dual Watch': '双守候', 'EEPROM size': 'EEPROM 容量', 'Firmware version': '固件版本',
 };
 const label = (s: string | number) => LABELS[String(s)] ?? String(s);
-const draftKey = (model: string) => `ba7ktc-chirp-${model}-v1`;
-function initial(model: ChirpModel): ChirpDraft | null {
-  try { const text = localStorage.getItem(draftKey(model)); return text ? parseChirpDraft(text, model) : null; }
-  catch { return null; }
-}
 export function SettingsTree({ nodes, edits, onChange, disabled }: { nodes: SettingNode[]; edits: SettingEdits; onChange: (edits: SettingEdits) => void; disabled: boolean }) {
   return <>{nodes.map(node => node.children ? <details className="chirp-setting-group" key={node.key} open><summary>{label(node.label)}</summary><SettingsTree nodes={node.children} edits={edits} onChange={onChange} disabled={disabled} /></details> :
     <label className="chirp-field" key={node.key}><span title={node.doc}>{label(node.label)}</span><span className="chirp-values">{node.values?.map((spec, i) => {
@@ -31,149 +34,100 @@ export function SettingsTree({ nodes, edits, onChange, disabled }: { nodes: Sett
         : <input key={i} aria-label={node.label} disabled={locked} type={spec.type === 'number' ? 'number' : 'text'} min={spec.min} max={spec.type === 'number' ? spec.max : undefined} step={spec.step} maxLength={spec.type === 'string' ? spec.max : undefined} value={String(value)} onChange={e => change(spec.type === 'number' ? Number(e.target.value) : e.target.value)} />;
     })}</span></label>)}</>;
 }
-export default function ChirpWorkbench({ model, switcher, onBusy }: { model: ChirpModel; switcher: ReactNode; onBusy: (busy: boolean) => void }) {
-  const [draft, setDraft] = useState<ChirpDraft | null>(() => initial(model));
-  const [past, setPast] = useState<ChirpDraft[]>([]);
-  const [tab, setTab] = useState<'channels' | 'settings' | 'radio'>('channels');
-  const [connected, setConnected] = useState(false), [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState({done:0,total:1});
-  const port = useRef<SerialPortLike | null>(null);
-  const runtime = useRef(new ChirpRuntime());
-  const [message, setMessage] = useState(''), [error, setError] = useState(false);
-  const [query, setQuery] = useState(''), [active, setActive] = useState<number | null>(null), [selection, setSelection] = useState<number[]>([]);
-  const [pending, setPending] = useState<{ channels: ChirpChannel[]; name: string } | null>(null);
-  const file = useRef<HTMLInputElement>(null);
-  const entry = RADIO_MODELS.find(m => m.id === model)!;
-  const f = draft?.document.features;
-  const channels = draft?.channels.filter(c => !c.empty) ?? [];
-  const current = channels.find(c => c.number === active);
-  const filtered = channels.filter(c => [c.number, c.name, c.rx, c.tx, c.comment].join(' ').toLowerCase().includes(query.toLowerCase()));
-  const issues = draft && f ? channelIssues(draft.channels, f, draft.document.channels) : [];
-  const changes = draft ? editedChannels(draft) : [];
-  const settingsCount = Object.keys(draft?.settings ?? {}).length;
-  const tell = (text: string, failed = false) => { setMessage(text); setError(failed); };
-  const commit = (next: ChirpDraft) => { if (draft) setPast(p => [...p.slice(-29), draft]); setDraft(next); };
-  const update = (number: number, patch: Partial<ChirpChannel>) => { if (draft) commit({ ...draft, channels: draft.channels.map(c => c.number === number ? { ...c, ...patch } : c) }); };
-  useEffect(() => { onBusy(busy); return () => onBusy(false); }, [busy, onBusy]);
-  useEffect(() => {
-    if (!draft) return;
-    const id = setTimeout(() => { try { localStorage.setItem(draftKey(model), JSON.stringify(draft)); } catch { tell('浏览器存储已满，请导出方案', true); } }, 350);
-    return () => clearTimeout(id);
-  }, [draft, model]);
-  useEffect(() => () => runtime.current.dispose(), []);
-  async function connect() {
-    try {
-      if (!directRadioSupported()) throw new Error('请使用桌面 Chrome / Edge，通过 HTTPS 或本机地址打开工作台');
-      port.current = await serialApi()!.requestPort(); setConnected(true); tell('写频线已连接');
-    } catch (e) { if ((e as Error).name !== 'NotFoundError') tell((e as Error).message, true); }
-  }
-  function acceptDocument(doc: ChirpDocument, name?: string) {
-    if (!isChirpDocument(doc) || doc.model !== model) throw new Error('驱动返回的型号／数据无效');
-    commit({ document: doc, channels: doc.channels, settings: {}, name: name ?? entry.label });
-    setActive(null); setSelection([]); setPending(null);
-  }
-  async function run(action: 'read' | 'write') {
-    setBusy(true); setProgress({done:0,total:1}); tell(action === 'read' ? '读取中…' : '写入中…');
-    try {
-      if (!port.current || !connected) throw new Error('请先连接写频线');
-      if (action === 'write' && (!draft || issues.length)) throw new Error(issues[0] ?? '请先读取电台或导入 IMG 镜像');
-      const result = await runtime.current.execute<ChirpDocument>({ action, model,
-        ...(action === 'write' && draft ? { image: draft.document.image, channels: changes, settings: draft.settings } : {}) },
-        (done,total) => setProgress({done,total}), port.current);
-      if (action === 'read') {
-        download(Uint8Array.from(atob(result.image),c=>c.charCodeAt(0)), `${model}-原始备份-${Date.now()}.img`);
-      }
-      acceptDocument(result, action === 'write' ? draft?.name : undefined);
-      tell(action === 'read' ? '读取完成，已导出原始 IMG 备份' : '写入完成');
-      if (action === 'read') setTab('channels');
-    } catch (e) { tell((e as Error).message, true); }
-    finally { setBusy(false); }
-  }
-  async function prepare() {
-    if (!draft) throw new Error('请先读取电台或导入 IMG 镜像');
-    if (issues.length) throw new Error(issues[0]);
-    const result = await runtime.current.execute<{ document: ChirpDocument; warnings: string[] }>({ action:'prepare', model, image: draft.document.image, channels: changes, settings: draft.settings });
-    if (!isChirpDocument(result.document)) throw new Error('镜像生成失败');
-    return result.document;
-  }
-  async function exportFile(kind: 'project' | 'image') {
-    if (!draft) return;
-    if (kind === 'project') { download(JSON.stringify(draft, null, 2), draft.name + '.radio.json', 'application/json'); tell('方案已导出'); return; }
-    setBusy(true);
-    try { const doc = await prepare(); download(Uint8Array.from(atob(doc.image), c => c.charCodeAt(0)), draft.name + '.img'); tell('IMG 已生成并通过驱动验证'); }
-    catch (e) { tell((e as Error).message, true); }
-    finally { setBusy(false); }
-  }
-  async function importFile(input: File) {
-    if (input.size > 4_000_000) { tell('文件超过 4 MB', true); return; }
-    setBusy(true); tell('解析文件…');
-    try {
-      if (/\.img$/i.test(input.name)) {
-        const bytes = new Uint8Array(await input.arrayBuffer()); let raw = '';
-        for (const b of bytes) raw += String.fromCharCode(b);
-        const doc = await runtime.current.execute<ChirpDocument>({ action:'image', model, image: btoa(raw) });
-        acceptDocument(doc, input.name.replace(/\.img$/i, '')); tell('镜像已载入'); return;
-      }
-      if (/\.json$/i.test(input.name)) {
-        const text = await input.text();
-        if (/\.d500\.json$/i.test(input.name)) {
-          if (!f) throw new Error('请先读取目标电台或导入其 IMG 镜像');
-          const source = parseProject(text); setPending({ channels: fromD500(source.channels, f), name: source.name });
-        } else { const next = parseChirpDraft(text, model); commit(next); tell('方案已载入'); }
-      } else if (/\.(xlsx|xls|csv|tsv)$/i.test(input.name)) {
-        if (!f) throw new Error('请先读取目标电台或导入其 IMG 镜像');
-        setPending({ channels: importChirpTable(await input.arrayBuffer(), f), name: input.name });
-      } else throw new Error('支持 IMG / JSON / XLSX / CSV / TSV');
-    } catch (e) { tell((e as Error).message, true); }
-    finally { setBusy(false); if (file.current) file.current.value = ''; }
-  }
-  function acceptTable(replace: boolean) {
-    if (!draft || !pending) return;
-    const map = new Map(draft.channels.map(c => [c.number, replace ? { ...c, empty: true } : c]));
-    for (const c of pending.channels) {
-      const old = map.get(c.number);
-      map.set(c.number, { ...c, extra: old?.extra ?? [], ...(old?.extraEdits ? { extraEdits: old.extraEdits } : {}) });
-    }
-    commit({ ...draft, channels: [...map.values()].sort((a, b) => a.number - b.number) });
-    setPending(null); setTab('channels'); tell(`已导入 ${pending.channels.length} 条；编号按导入预览保留`);
-  }
-  function add() {
-    if (!draft || !f) return;
-    for (let n = f.bounds[0]; n <= f.bounds[1]; n++) if (!channels.some(c => c.number === n)) {
-      commit({ ...draft, channels: [...draft.channels.filter(c => c.number !== n), makeChirpChannel(n, f)].sort((a,b) => a.number-b.number) }); setActive(n); return;
-    }
-    tell('信道已满', true);
-  }
-  function batch(patch: Partial<ChirpChannel>) { if (draft) commit({ ...draft, channels: draft.channels.map(c => selection.includes(c.number) ? { ...c, ...patch } : c) }); }
-  const tones = f ? ['', ...f.tones.map(t => t.toFixed(1)), ...f.dtcs.flatMap(n => ['N', 'R'].map(s => `D${String(n).padStart(3,'0')}${s}`))] : [];
-  return <div className="app chirp-app">
-    <aside className="sidebar"><a href="#" className="brand" onClick={e => e.preventDefault()}><Radio size={23}/><span>RADIO<span className="brand-sub">写频工作台</span></span></a>{switcher}
-      <nav>{([['channels','信道',Radio],['settings','电台设置',Settings2],['radio','电台读写',Cable]] as const).map(([id,title,Icon]) => <button key={id} className={`nav ${tab === id ? 'active' : ''}`} disabled={busy} onClick={() => setTab(id)}><Icon size={17}/>{title}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="author"><strong>BA7KTC</strong><a href="https://github.com/JukZeon/d500-web" target="_blank" rel="noreferrer"><GitBranch size={16}/></a></div></div>
-    </aside>
-    <div className="workspace-shell"><header className="topbar"><strong>{entry.label} <span className="chirp-muted">{entry.variant}</span></strong><div className="topbar-right"><button className="btn" disabled={busy} onClick={() => file.current?.click()}><Upload size={15}/>导入</button><button className="btn" disabled={!draft || busy} onClick={() => void exportFile('project')}><Save size={15}/>保存方案</button><button className="btn" disabled={!draft || busy} onClick={() => { if (!draft) return; setPast(p => [...p.slice(-29), draft]); setDraft(null); setActive(null); setSelection([]); setPending(null); try { localStorage.removeItem(draftKey(model)); } catch { tell('无法清除浏览器草稿',true); } }}>关闭方案</button><button className="btn primary" disabled={busy} onClick={() => setTab('radio')}><Cable size={15}/>读写</button></div></header>
-      <main className="chirp-main"><input className="file-input" type="file" ref={file} accept=".img,.json,.xlsx,.xls,.csv,.tsv" onChange={e => { if(e.target.files?.[0]) void importFile(e.target.files[0]); }}/>
-        <div className="chirp-document"><input aria-label="方案名称" disabled={!draft || busy} value={draft?.name ?? entry.label} onChange={e => draft && commit({ ...draft, name: e.target.value })}/><span>{f ? `${f.bounds[0]}–${f.bounds[1]} · ${channels.length} 条` : entry.note}</span><span>{draft?.document.firmware}</span><button className="btn" disabled={!past.length || busy} onClick={() => { setDraft(past[past.length-1]); setPast(past.slice(0,-1)); }}><Undo2 size={14}/>撤销</button></div>
-        {message && <div role={error ? 'alert' : 'status'} className={`chirp-message ${error ? 'error' : ''}`}>{message}</div>}
-        {pending && <section className="chirp-import"><strong>导入 {pending.channels.length} 条信道</strong><p>同编号覆盖。替换会清空未列出的信道。</p><div className="chirp-preview">{pending.channels.map(c => <div key={c.number}><span>{c.number}</span><strong>{c.name || '未命名'}</strong><span className="mono">{c.rx} → {c.tx || '禁发'}</span></div>)}</div><div className="chirp-actions"><button className="btn" onClick={() => setPending(null)}>取消</button><button className="btn" onClick={() => acceptTable(false)}>合并</button><button className="btn primary" onClick={() => acceptTable(true)}>替换信道</button></div></section>}
-        {tab === 'radio' && <section className="chirp-radio"><h2>电台读写</h2><div className="chirp-connect"><button className="btn" disabled={busy} onClick={() => void connect()}><Cable size={15}/>{connected ? '更换写频线' : '连接写频线'}</button><span className="chirp-muted">{connected ? '写频线已授权' : '网页直接连接 · Chrome / Edge'}</span></div>
-          <div className="radio-warning"><strong>⚠️ 刷写有风险，请先备份电台原始配置。</strong><span>使用本软件造成的数据丢失、设备损坏等后果由使用者自行承担，作者不承担责任。</span></div>
-          <div className="chirp-actions"><button className="btn" disabled={busy || !connected} onClick={() => void run('read')}><Download size={15}/>读取电台</button><button className="btn primary" disabled={busy || !connected || !draft || !!issues.length} onClick={() => void run('write')}><Upload size={15}/>写入电台</button><button className="btn" disabled={busy || !draft} onClick={() => void exportFile('image')}>导出 IMG</button></div>
-          <p className="chirp-muted chirp-guide">{changes.length} 条信道修改 · {settingsCount} 项设置修改。该型号按驱动范围写入完整配置，不自动回读。</p>
-          {busy && <div className="chirp-progress"><progress value={progress.done} max={progress.total}/><span>{Math.round(progress.done/progress.total*100)}%</span></div>}
-          <details className="chirp-trace"><summary>通信记录</summary><button className="text-btn" disabled={busy} onClick={()=>download(JSON.stringify({model,entries:runtime.current.trace},null,2),`${model}-通信记录.json`,'application/json')}>下载</button><pre>{runtime.current.trace.slice(-10).map(item=>`${item.direction} ${item.hex}`).join('\n') || '暂无记录'}</pre></details>
-        </section>}
-        {tab !== 'radio' && !draft && <section className="chirp-empty"><Radio size={32}/><h2>先载入这台电台的配置</h2><p>读取电台，或导入同型号、同固件的 CHIRP IMG。之后可编辑信道与受支持的设置。</p><div className="chirp-actions"><button className="btn primary" onClick={() => setTab('radio')}>连接电台</button><button className="btn" onClick={() => file.current?.click()}>导入镜像／方案</button></div></section>}
-        {issues.length > 0 && <details className="chirp-issues"><summary>{issues.length} 个问题</summary>{issues.map((s,i) => <p key={i}>{s}</p>)}</details>}
-        {tab === 'channels' && draft && f && <section className="chirp-channel-panel"><div className="chirp-toolbar"><label className="search"><Search size={15}/><input aria-label="搜索信道" value={query} onChange={e => setQuery(e.target.value)} placeholder="名称、频率、备注"/></label><button className="btn" disabled={busy} onClick={add}><Plus size={15}/>信道</button><button className="btn" disabled={!selection.length || busy} onClick={() => batch({empty:true})}><Trash2 size={15}/>删除 {selection.length || ''}</button><span className="chirp-muted">名称 {f.nameLength} 位 · {draft.document.settingsLimited ? 'GB2312 中文' : '驱动字符集'}</span></div>
-          {selection.length > 0 && <div className="chirp-batch"><span>已选 {selection.length}</span><select aria-label="批量功率" defaultValue="" onChange={e => { if(e.target.value) batch({power:e.target.value}); e.target.value=''; }}><option value="">批量功率</option>{f.powers.map(p => <option key={p} value={p}>{label(p)}</option>)}</select><select aria-label="批量模式" defaultValue="" onChange={e => { if(e.target.value) batch({mode:e.target.value}); e.target.value=''; }}><option value="">批量模式</option>{f.modes.map(p => <option key={p} value={p}>{label(p)}</option>)}</select><button className="text-btn" onClick={() => setSelection([])}>取消选择</button></div>}
-          <div className="chirp-grid"><div className="chirp-table-scroll"><table className="chirp-table"><thead><tr><th><input aria-label="选择全部信道" type="checkbox" checked={filtered.length>0 && filtered.every(c => selection.includes(c.number))} onChange={e => setSelection(e.target.checked ? filtered.map(c => c.number) : [])}/></th><th>编号</th><th>名称</th><th>接收 MHz</th><th>发射 MHz</th><th>接收哑音</th><th>发射哑音</th><th>模式</th><th>功率</th></tr></thead><tbody>{filtered.map(c => <tr key={c.number} className={active===c.number?'active':''} onClick={() => setActive(c.number)}><td><input type="checkbox" aria-label={`选择信道 ${c.number}`} checked={selection.includes(c.number)} disabled={busy} onChange={e => setSelection(e.target.checked ? [...selection,c.number] : selection.filter(n=>n!==c.number))}/></td><td className="mono">{String(c.number).padStart(3,'0')}</td>{(['name','rx','tx','rxTone','txTone'] as const).map(k => <td key={k}><input aria-label={`${c.number} ${k}`} value={c[k]} disabled={busy} onChange={e => update(c.number,{[k]:e.target.value})} list={k.endsWith('Tone')?'chirp-tones':undefined}/></td>)}<td><select aria-label={`${c.number} 模式`} value={c.mode} disabled={busy} onChange={e => update(c.number,{mode:e.target.value})}>{f.modes.map(v=><option key={v} value={v}>{label(v)}</option>)}</select></td><td><select aria-label={`${c.number} 功率`} value={c.power} disabled={busy} onChange={e=>update(c.number,{power:e.target.value})}><option value="">默认</option>{f.powers.map(v=><option key={v} value={v}>{label(v)}</option>)}</select></td></tr>)}</tbody></table></div>
-            {current && <aside className="chirp-inspector"><h3>信道 {current.number}</h3><p className="chirp-muted">{current.name}</p><label className="chirp-field">扫描<select disabled={busy} value={current.skip} onChange={e=>update(current.number,{skip:e.target.value})}>{f.skips.map(v=><option key={v} value={v}>{v==='S'?'跳过':v||'参与'}</option>)}</select></label>{f.hasStep && <label className="chirp-field">步进 kHz<select disabled={busy} value={current.step} onChange={e=>update(current.number,{step:Number(e.target.value)})}>{f.steps.map(v=><option key={v} value={v}>{label(v)}</option>)}</select></label>}<label className="chirp-comment">备注<textarea disabled={busy} value={current.comment} onChange={e=>update(current.number,{comment:e.target.value})}/></label><SettingsTree nodes={current.extra} edits={current.extraEdits??{}} disabled={busy} onChange={extraEdits=>update(current.number,{extraEdits})}/><button className="text-btn" onClick={()=>setActive(null)}>收起</button></aside>}
-          </div><datalist id="chirp-tones">{tones.map(t=><option key={t} value={t}/>)}</datalist>
-        </section>}
-        {tab === 'settings' && draft && <section className="chirp-settings"><h2>电台设置</h2>{draft.document.settingsLimited && <p className="chirp-message">{draft.document.settingsCoverage === 'basic' ? '已适配该版本的基本设置；按键、信令和扩容配置保留。' : '该固件版本暂支持信道编辑，其他配置保留。'}</p>}<SettingsTree nodes={draft.document.settings} edits={draft.settings} disabled={busy} onChange={settings => commit({...draft,settings})}/></section>}
-        <footer className="page-footer"><span>本地处理 · {connected ? '写频线已连接' : '未连接'}</span><span>BA7KTC / Radio Workbench / <a href="https://github.com/JukZeon/d500-web" target="_blank" rel="noreferrer">GitHub</a> / <a href="/source.zip" download>源码</a> / <a href="/LICENSE.txt" target="_blank" rel="noreferrer">许可</a></span></footer>
-      </main>
-    </div>
-  </div>;
+function initial(model:ChirpModel):ChirpDraft {
+ try {const saved=localStorage.getItem(chirpStorage(model));if(saved)return parseChirpDraft(saved,model);}catch{/* Keep a damaged saved draft untouched until the user imports a replacement. */}
+ return offlineDraft(model);
+}
+export default function ChirpWorkbench({ model, switcher, onBusy, view, onView }: { model:ChirpModel; switcher:ReactNode; onBusy:(busy:boolean)=>void; view:WorkbenchView; onView:(view:WorkbenchView)=>void }) {
+ const [draft,setDraft]=useState(()=>initial(model)),[past,setPast]=useState<ChirpDraft[]>([]),[future,setFuture]=useState<ChirpDraft[]>([]);
+ const [connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[sidebar,setSidebar]=useState(false),[progress,setProgress]=useState({done:0,total:1});
+ const [message,setMessage]=useState(''),[error,setError]=useState(false),[group,setGroup]=useState('*');
+ const [exportOpen,setExportOpen]=useState(false);
+ const [pending,setPending]=useState<{channels:ChirpChannel[];name:string}|null>(null),[paste,setPaste]=useState<string|null>(null);
+ const port=useRef<SerialPortLike|null>(null),runtime=useRef(new ChirpRuntime()),file=useRef<HTMLInputElement>(null);
+ const entry=RADIO_MODELS.find(m=>m.id===model)!,f=draft.document.features,channels=managedChirp(draft.channels,model),groups=[...new Set(channels.map(c=>c.group).filter(Boolean))].sort();
+ const saving=useAutosave(chirpStorage(model),draft);
+ const issues=channelIssues(draft.channels,f,draft.document.channels),changes=editedChannels(draft),settingsCount=Object.keys(draft.settings).length;
+ const tell=(text:string,failed=false)=>{setMessage(text);setError(failed);};
+ const commit=(next:ChirpDraft)=>{setPast(old=>[...old.slice(-49),draft]);setFuture([]);setDraft(next);};
+ const shared=useSharedProfile(model,{name:draft.name,channels,features:f,apply:(rows,mode)=>commit(applyChirpTransfer(draft,rows,mode))});
+ const undo=()=>{if(!past.length)return;setFuture([draft,...future]);setDraft(past[past.length-1]);setPast(past.slice(0,-1));};
+ const redo=()=>{if(!future.length)return;setPast([...past,draft]);setDraft(future[0]);setFuture(future.slice(1));};
+ useEffect(()=>{onBusy(busy);return()=>onBusy(false);},[busy,onBusy]);
+ useEffect(()=>()=>runtime.current.dispose(),[]);
+ useEffect(()=>{
+  const handler=(event:KeyboardEvent)=>{if(!(event.ctrlKey||event.metaKey)||busy||view==='library'||document.querySelector('[role="dialog"]'))return;const editing=event.target instanceof HTMLElement&&['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName);if(event.key.toLowerCase()==='s'){event.preventDefault();download(JSON.stringify(draft,null,2),draft.name+'.radio.json','application/json');}if(event.key.toLowerCase()==='z'&&!editing){event.preventDefault();if(event.shiftKey)redo();else undo();}};
+  window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);
+ });
+ async function getPort(force=false){
+  if(!directRadioSupported())throw Error('请使用桌面 Chrome / Edge，通过 HTTPS 或本机地址打开工作台');
+  if(!port.current||force){const api=serialApi()!,authorized=force?[]:await api.getPorts?.()??[];port.current=authorized.length===1?authorized[0]:await api.requestPort();}
+  setConnected(true);return port.current;
+ }
+ function acceptDocument(document:ChirpDocument,name?:string){
+  if(!isChirpDocument(document)||document.model!==model)throw Error('驱动返回的型号／数据无效');
+  let next:ChirpDraft={document,channels:document.channels.map(c=>{const previous=draft.channels.find(old=>!old.empty&&old.number===c.number&&channelIdentity({...c,mode:c.mode})===channelIdentity({...old,mode:old.mode}));return previous?{...c,group:previous.group,libraryId:previous.libraryId}:c;}),settings:{},name:name??entry.label};
+  if(!draft.document.image&&channels.length)next=applyChirpTransfer(next,channels,'merge');
+  commit(next);setPending(null);
+ }
+ async function run(action:'read'|'write'){
+  setBusy(true);setProgress({done:0,total:1});tell(action==='read'?'读取中…':'写入中…');
+  try{
+   if(action==='write'&&(!draft.document.image||issues.length))throw Error(issues[0]??'请先载入整机配置');
+   const selectedPort=await getPort();
+   const result=await runtime.current.execute<ChirpDocument>({action,model,...(action==='write'?{image:draft.document.image,channels:changes,settings:draft.settings}:{})},(done,total)=>setProgress({done,total}),selectedPort);
+   if(action==='read')download(Uint8Array.from(atob(result.image),c=>c.charCodeAt(0)),`${model}-原始备份-${Date.now()}.img`);
+   const retained=!draft.document.image&&channels.length;
+   acceptDocument(result,action==='write'?draft.name:undefined);
+   tell(action==='read'?`读取完成${retained?`，保留 ${retained} 条信道编辑`:''}`:'写入完成');if(action==='read')onView('channels');
+  }catch(e){if((e as Error).name!=='NotFoundError')tell((e as Error).message,true);}finally{setBusy(false);}
+ }
+ async function exportFile(kind:'project'|'image'){
+  if(kind==='project'){download(JSON.stringify(draft,null,2),draft.name+'.radio.json','application/json');return;}
+  setBusy(true);
+  try{
+   if(!draft.document.image)throw Error('请先载入整机配置');if(issues.length)throw Error(issues[0]);
+   const result=await runtime.current.execute<{document:ChirpDocument;warnings:string[]}>({action:'prepare',model,image:draft.document.image,channels:changes,settings:draft.settings});
+   if(!isChirpDocument(result.document))throw Error('镜像生成失败');
+   download(Uint8Array.from(atob(result.document.image),c=>c.charCodeAt(0)),draft.name+'.img');tell('IMG 已生成并通过驱动验证');
+  }catch(e){tell((e as Error).message,true);}finally{setBusy(false);}
+ }
+ async function importFile(input:File){
+  if(input.size>8_000_000){tell('文件超过 8 MB',true);return;}setBusy(true);
+  try{
+   if(/\.img$/i.test(input.name)){
+    let raw='';for(const byte of new Uint8Array(await input.arrayBuffer()))raw+=String.fromCharCode(byte);
+    const document=await runtime.current.execute<ChirpDocument>({action:'image',model,image:btoa(raw)});acceptDocument(document,input.name.replace(/\.img$/i,''));tell('整机配置已载入');return;
+   }
+   if(/\.dat$/i.test(input.name)){shared.transfer(managedD500(parseDat(await input.text(),input.name).channels));return;}
+   if(/\.json$/i.test(input.name)){
+    const text=await input.text(),value=JSON.parse(text);
+    if(value.schema==='radio-channel-library-v1'){shared.store(parseLibrary(text).channels);onView('library');}
+    else if([1,2].includes(value.schema)){shared.transfer(managedD500(parseProject(text).channels));}
+    else {const next=parseChirpDraft(text,value.document?.model);if(next.document.model===model){commit(next);tell('方案已载入');}else shared.transfer(managedChirp(next.channels,next.document.model));}
+   }else if(/\.(xlsx|xls|csv|tsv)$/i.test(input.name))setPending({channels:importChirpTable(await input.arrayBuffer(),f),name:input.name});
+   else throw Error('支持 IMG / DAT / JSON / XLSX / CSV / TSV');
+  }catch(e){tell((e as Error).message,true);}finally{setBusy(false);if(file.current)file.current.value='';}
+ }
+ function acceptTable(replace:boolean){if(!pending)return;commit(applyChirpTransfer(draft,managedChirp(pending.channels,model),replace?'replace':'merge'));setPending(null);onView('channels');tell('信道已导入');}
+ const changeView=(next:WorkbenchView)=>{onView(next);setSidebar(false);};
+ return <div className={`app unified-app ${sidebar?'sidebar-open':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();if(!busy&&e.dataTransfer.files[0])void importFile(e.dataTransfer.files[0]);}}>
+  <aside className="sidebar" inert={busy}><WorkspaceNav view={view} onView={changeView} switcher={switcher} count={channels.length} libraryCount={shared.library.channels.length} groups={groups} group={group} onGroup={setGroup} busy={busy} connected={connected}/></aside>
+  <div className="workspace-shell"><header className="topbar"><div className="breadcrumb"><button className="icon-btn" aria-label="打开侧栏" onClick={()=>setSidebar(!sidebar)}><Menu size={18}/></button><strong>{VIEW_LABELS[view]}</strong><span className="save-status">{saving}</span></div><div className="topbar-right"><>{view!=='library'&&<><button className="btn" disabled={busy} onClick={()=>file.current?.click()}><Upload size={15}/>导入</button><button className="btn" disabled={busy} onClick={()=>setExportOpen(true)}><Download size={15}/>导出</button></>}</><button className="btn primary" disabled={busy} onClick={()=>onView('radio')}><Cable size={15}/>读写电台</button><a className="github-link" href="https://github.com/JukZeon/d500-web" target="_blank" rel="noreferrer" aria-label="项目 GitHub"><GitBranch size={16}/><span>GitHub</span></a></div></header>
+   <main><input className="file-input" type="file" ref={file} aria-label="导入信道文件" accept=".img,.dat,.json,.xlsx,.xls,.csv,.tsv" onChange={e=>e.target.files?.[0]&&void importFile(e.target.files[0])}/>
+    {view!=='library'&&<section className="document-bar" inert={busy}><input aria-label="方案名称" className="project-name" value={draft.name} onChange={e=>commit({...draft,name:e.target.value})}/><span>{entry.variant} · {channels.length} / {f.bounds[1]-f.bounds[0]+1} 信道</span><span className={`tag ${draft.document.image?'':'muted'}`}>{draft.document.image?'已载入整机配置':'信道草稿'}</span><span className="chirp-muted">{draft.document.firmware}</span></section>}
+    {message&&<div role={error?'alert':'status'} className={`chirp-message ${error?'error':''}`}>{message}<button className="icon-btn" aria-label="关闭提示" onClick={()=>setMessage('')}><X size={14}/></button></div>}
+    {pending&&<section className="chirp-import"><strong>导入 {pending.channels.length} 条信道</strong><div className="chirp-preview">{pending.channels.slice(0,100).map(c=><div key={c.number}><span>{c.number}</span><strong>{c.name||'未命名'}</strong><span className="mono">{c.rx} → {c.tx||'仅接收'}</span></div>)}</div><div className="chirp-actions"><button className="btn" onClick={()=>setPending(null)}>取消</button><button className="btn" onClick={()=>acceptTable(false)}>按编号合并</button><button className="btn primary" onClick={()=>acceptTable(true)}>替换信道</button></div></section>}
+    {view==='library'&&<SharedLibraryPanel/>}
+    {view==='channels'&&<><ChannelEditor channels={channels} model={model} features={f} original={draft.document.channels} disabled={busy} groupFilter={group} onGroupFilter={setGroup} onChange={rows=>commit({...draft,channels:replaceChirpChannels(draft.channels,rows,f)})} onStore={shared.store} onTransfer={shared.transfer} undo={undo} redo={redo} canUndo={!!past.length} canRedo={!!future.length} extra={row=>{const channel=draft.channels.find(c=>c.number===row.number);return channel?.extra.length?<details><summary>机型参数</summary><SettingsTree nodes={channel.extra} edits={channel.extraEdits??{}} disabled={busy} onChange={extraEdits=>commit({...draft,channels:draft.channels.map(c=>c.number===row.number?{...c,extraEdits}:c)})}/></details>:null;}}/><div className="channel-bottom-actions"><button className="text-btn" onClick={()=>setPaste('')}>粘贴表格</button><span className="chirp-muted">{f.bounds[0]}–{f.bounds[1]} · 名称 {f.nameLength} 位</span></div></>}
+    {view==='spectrum'&&<FrequencyPanel channels={channels} onOpen={()=>onView('channels')}/>}
+    {view==='settings'&&<section className="chirp-settings"><h2>电台设置</h2>{!draft.document.image?<div className="channel-empty"><h3>载入这台电台的配置</h3><p>读取电台或导入 IMG，编辑对应的整机设置。</p><button className="btn" onClick={()=>onView('radio')}>读取电台</button><button className="btn" onClick={()=>file.current?.click()}>导入 IMG</button></div>:<>{draft.document.settingsLimited&&<p className="chirp-message">{draft.document.settingsCoverage==='basic'?'基本设置可编辑，其余配置保留。':'该版本暂支持信道编辑。'}</p>}<SettingsTree nodes={draft.document.settings} edits={draft.settings} disabled={busy} onChange={settings=>commit({...draft,settings})}/></>}</section>}
+    {view==='files'&&<section className="file-list"><article><FileCode2 size={22}/><div><h2>整机镜像 IMG</h2><p>{draft.document.image?'信道与机型配置':'尚未载入整机配置'}</p></div><button className="btn" onClick={()=>file.current?.click()}>导入文件</button><button className="btn" disabled={!draft.document.image||busy} onClick={()=>void exportFile('image')}>导出 IMG</button></article><article><HardDrive size={22}/><div><h2>完整方案</h2><p>信道、设置修改、分组与备注</p></div><button className="btn" onClick={()=>void exportFile('project')}>下载备份</button></article><article><Library size={22}/><div><h2>共享信道库</h2><p>跨型号管理信道</p></div><button className="btn" onClick={()=>onView('library')}>打开信道库</button></article><article><FileSpreadsheet size={22}/><div><h2>表格导入</h2><p>XLSX / CSV / TSV</p></div><button className="btn" onClick={()=>file.current?.click()}>选择表格</button><button className="btn" onClick={()=>setPaste('')}>粘贴表格</button></article><article><Plus size={22}/><div><h2>新建方案</h2></div><button className="btn" onClick={()=>{commit(offlineDraft(model));onView('channels');}}>新建</button></article></section>}
+    {view==='radio'&&<section className="chirp-radio"><h2>{entry.label} · {entry.variant}</h2><div className="chirp-connect"><button className="btn" disabled={busy} onClick={()=>void getPort(true).then(()=>tell('写频线已连接')).catch(e=>(e as Error).name!=='NotFoundError'&&tell((e as Error).message,true))}><Cable size={15}/>{connected?'更换写频线':'连接写频线'}</button><span className="chirp-muted">{connected?'写频线已授权':'Chrome / Edge'}</span></div><div className="radio-warning"><strong>⚠️ 刷写有风险，请先备份电台原始配置。</strong><span>使用本软件造成的数据丢失、设备损坏等后果由使用者自行承担，作者不承担责任。</span></div><div className="chirp-actions"><button className="btn" disabled={busy} onClick={()=>void run('read')}><Download size={15}/>读取电台</button><button className="btn primary" disabled={busy||!draft.document.image||!!issues.length} onClick={()=>void run('write')}><Upload size={15}/>写入电台</button><button className="btn" disabled={busy||!draft.document.image} onClick={()=>void exportFile('image')}>导出 IMG</button></div><p className="chirp-muted chirp-guide">{changes.length} 条信道修改 · {settingsCount} 项设置修改。按驱动范围写入，不自动回读。</p>{!draft.document.image&&<p className="import-note">写入前需载入该机的整机配置，已有信道编辑会保留。</p>}{issues.length>0&&<details className="chirp-issues"><summary>{issues.length} 个待调整项</summary>{issues.map((s,i)=><p key={i}>{s}</p>)}</details>}{busy&&<div className="chirp-progress"><progress value={progress.done} max={progress.total}/><span>{Math.round(progress.done/progress.total*100)}%</span></div>}<details className="chirp-trace"><summary>通信记录</summary><button className="text-btn" disabled={busy} onClick={()=>download(JSON.stringify({model,entries:runtime.current.trace},null,2),`${model}-通信记录.json`,'application/json')}>下载</button><pre>{runtime.current.trace.slice(-10).map(item=>`${item.direction} ${item.hex}`).join('\n')||'暂无记录'}</pre></details></section>}
+    <footer className="page-footer"><span>本地处理 · {connected?'写频线已连接':'未连接'}</span><span>BA7KTC / Radio Workbench / <a href="https://github.com/JukZeon/d500-web" target="_blank" rel="noreferrer">GitHub</a> / <a href="/source.zip" download>源码</a> / <a href="/LICENSE.txt" target="_blank" rel="noreferrer">许可</a></span></footer>
+   </main>
+  </div>
+  {paste!==null&&<WorkbenchDialog label="粘贴表格" onClose={()=>setPaste(null)}><header><h2>粘贴表格</h2><button className="icon-btn" aria-label="关闭粘贴表格" onClick={()=>setPaste(null)}><X size={18}/></button></header><p className="import-note">无表头：名称、接收 MHz、发射 MHz、发射哑音。</p><textarea className="paste-area mono" aria-label="粘贴信道数据" value={paste} onChange={e=>setPaste(e.target.value)}/><div className="modal-actions"><button className="btn primary" disabled={!paste.trim()} onClick={()=>{const text=/接收|frequency|rx/i.test(paste.split('\n')[0])?paste:'名称\t接收频率\t发射频率\t发射哑音\n'+paste;void importFile(new File([text],'粘贴.tsv')).then(()=>setPaste(null));}}>预览</button></div></WorkbenchDialog>}
+  {exportOpen&&<WorkbenchDialog label="导出" onClose={()=>setExportOpen(false)}><header><h2>导出</h2><button className="icon-btn" aria-label="关闭导出" onClick={()=>setExportOpen(false)}><X size={18}/></button></header><div className="export-change-summary"><strong>{channels.length} 条信道</strong><span>{settingsCount} 项设置修改</span></div><div className="export-options"><button disabled={!draft.document.image||busy} onClick={()=>void exportFile('image').then(()=>setExportOpen(false))}><span className="format-icon"><FileCode2 size={24}/></span><span><strong>整机镜像 <em>.img</em></strong><small>{draft.document.image?'信道与机型配置':'请先载入整机配置'}</small></span><Download size={18}/></button><button onClick={()=>void exportFile('project').then(()=>setExportOpen(false))}><span className="format-icon"><Save size={24}/></span><span><strong>完整方案 <em>.radio.json</em></strong><small>含设置、分组、备注与原镜像</small></span><Download size={18}/></button></div></WorkbenchDialog>}
+ </div>;
 }

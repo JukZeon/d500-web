@@ -29,6 +29,7 @@ export function parseProject(text: string): Workspace {
     if (!obj(c) || !Number.isInteger(c.slot) || Number(c.slot) < 0 || Number(c.slot) > 199 || !['wide', 'narrow'].includes(String(c.bandwidth)) || typeof c.busy !== 'boolean') throw new Error('方案中的信道字段无效。');
     for (const f of ['name', 'rx', 'tx', 'rxTone', 'txTone', 'power', 'group', 'note']) if (typeof c[f] !== 'string' || c[f].length > 2000) throw new Error('方案中的文字字段无效。');
     if (c.sourceSlot !== undefined && (!Number.isInteger(c.sourceSlot) || Number(c.sourceSlot) < 0 || Number(c.sourceSlot) > 199)) throw new Error('方案中的原始信道地址无效。');
+    if (c.libraryId !== undefined && (typeof c.libraryId !== 'string' || c.libraryId.length > 100)) throw new Error('共享信道关联无效。');
     const origin = template?.originalChannels.find(v => v.slot === Number(c.sourceSlot ?? c.slot));
     let power = c.power as Power;
     if (data.schema === 1) {
@@ -39,7 +40,7 @@ export function parseProject(text: string): Workspace {
     const advanced = Object.fromEntries(['scanAdd', 'pttId', 'signalCode', 'optionalSignal', 'muteMode', 'scramble'].map(f => [f, c[f] ?? (origin ?? newChannel(Number(c.slot)))[f as keyof Channel]]));
     for (const f of ['scanAdd', 'scramble']) if (typeof advanced[f] !== 'boolean') throw new Error('方案中的开关字段无效。');
     for (const f of ['pttId', 'signalCode', 'optionalSignal', 'muteMode']) if (!Number.isInteger(advanced[f]) || Number(advanced[f]) < 0 || Number(advanced[f]) > (f === 'pttId' ? 3 : 15)) throw new Error('方案中的信令字段无效。');
-    return { ...newChannel(Number(c.slot)), ...advanced, slot: Number(c.slot), ...(c.sourceSlot === undefined ? {} : { sourceSlot: Number(c.sourceSlot) }), name: String(c.name), rx: String(c.rx), tx: String(c.tx), rxTone: String(c.rxTone), txTone: String(c.txTone), power, bandwidth: c.bandwidth as 'wide' | 'narrow', busy: c.busy, group: String(c.group), note: String(c.note) };
+    return { ...newChannel(Number(c.slot)), ...advanced, ...(c.libraryId ? { libraryId: String(c.libraryId) } : {}), slot: Number(c.slot), ...(c.sourceSlot === undefined ? {} : { sourceSlot: Number(c.sourceSlot) }), name: String(c.name), rx: String(c.rx), tx: String(c.tx), rxTone: String(c.rxTone), txTone: String(c.txTone), power, bandwidth: c.bandwidth as 'wide' | 'narrow', busy: c.busy, group: String(c.group), note: String(c.note) };
   });
   if (new Set(channels.map(c => c.slot)).size !== channels.length) throw new Error('方案中存在重复信道编号。');
   return { schema: 2, name: data.name.slice(0, 200), channels, template, ...(settings ? { settings } : {}), updatedAt: new Date().toISOString() };

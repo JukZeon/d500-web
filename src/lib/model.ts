@@ -18,6 +18,7 @@ export interface Channel {
   scramble: boolean;
   group: string;
   note: string;
+  libraryId?: string;
 }
 export interface DatTemplate {
   rows: number[][];
