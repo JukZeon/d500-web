@@ -93,6 +93,7 @@ export function compatibleName(name: string, model: RadioModel, number: number, 
     for (const char of name) {
       const next = features.characters.includes(char) ? char : features.characters.includes(char.toUpperCase()) ? char.toUpperCase() : '';
       if (result.length + next.length > features.nameLength) break;
+      if(features.nameBytes){try{encodeName(result+next,features.nameBytes);}catch{break;}}
       result += next;
     }
   }

@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 export async function verifyRadioAssets(base, fetcher = fetch) {
   const url = new URL(base);
   const modules = ['radio/worker.js', 'radio/pyodide/pyodide.mjs', 'radio/pyodide/pyodide.asm.mjs'];
-  const resources = [...modules, 'radio/pyodide/pyodide.asm.wasm', 'radio/pyodide/python_stdlib.zip', 'radio/pyodide/pyodide-lock.json', 'radio/engine.py', 'radio/losehu.py', 'radio/browser.py', 'radio/vendor/chirp.zip'];
+  const resources = [...modules, 'radio/pyodide/pyodide.asm.wasm', 'radio/pyodide/python_stdlib.zip', 'radio/pyodide/pyodide-lock.json', 'radio/engine.py', 'radio/losehu.py', 'radio/uv5rh.py', 'radio/browser.py', 'radio/vendor/chirp.zip'];
   const results = await Promise.all(resources.map(async name => {
     const response = await fetcher(new URL(name, url), { method: 'HEAD', signal: AbortSignal.timeout(20_000), cache: 'no-store' });
     if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);

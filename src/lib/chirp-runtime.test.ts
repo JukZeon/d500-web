@@ -14,6 +14,12 @@ describe('browser serial adapter for CHIRP',()=>{
   it('joins fragmented packets and retains surplus bytes',async()=>{const p=fakePort(),link=new BrowserRadioPort(p.port,()=>{});p.push([1]);p.push([2,3,4]);expect(await link.io({op:'read',size:3,timeout:0.02})).toEqual({data:[1,2,3]});expect(await link.io({op:'read',size:1,timeout:0.02})).toEqual({data:[4]});await link.close();expect(p.closed()).toBe(true);});
   it('returns partial / empty reads on timeout like pyserial',async()=>{const p=fakePort(),link=new BrowserRadioPort(p.port,()=>{});p.push([0x06]);expect(await link.io({op:'read',size:4,timeout:0.01})).toEqual({data:[6]});expect(await link.io({op:'read',size:1,timeout:0.01})).toEqual({data:[]});await link.close();});
   it('writes complete driver frames without D500 byte pacing',async()=>{const p=fakePort(),link=new BrowserRadioPort(p.port,()=>{});expect(await link.io({op:'write',data:[0xab,0xcd,1]})).toEqual({written:3});expect(p.sent).toEqual([[0xab,0xcd,1]]);await link.close();});
+  it('clears delayed startup bytes before a UV-5RH handshake without losing its subsequent ACK',async()=>{
+    const p=fakePort(),link=new BrowserRadioPort(p.port,()=>{});
+    setTimeout(()=>p.push([0,0xff]),5);await link.prepare(20,5,100);
+    expect(await link.io({op:'read',size:1,timeout:0})).toEqual({data:[]});
+    p.push([6]);expect(await link.io({op:'read',size:1,timeout:.02})).toEqual({data:[6]});await link.close();
+  });
   it('fails on disconnect and rejects invalid requests',async()=>{const p=fakePort(),link=new BrowserRadioPort(p.port,()=>{});await expect(link.io({op:'read',size:0})).rejects.toThrow('读取长度');p.end();await expect(link.io({op:'read',size:1,timeout:0.01})).rejects.toThrow('断开');await link.close();});
   it('keeps the complete driver traceback and session details in communication records',async()=>{
     const traceback='Traceback: initial read\nTypeError: underlying browser failure\nchirp.errors.RadioError: Unexpected error communicating with the radio';

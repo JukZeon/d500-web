@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { readSpreadsheet } from './sheet-input';
+import { encodeName } from './encoding';
 import type { Channel } from './model';
 
 export const RADIO_MODELS = [
@@ -22,7 +23,7 @@ export interface ChirpChannel {
   group?: string;
   libraryId?: string;
 }
-export interface ChirpFeatures { bounds: [number, number]; nameLength: number; characters: string; modes: string[]; bands: [number, number][]; powers: string[]; steps: number[]; skips: string[]; tones: number[]; dtcs: number[]; hasSettings: boolean; hasStep: boolean }
+export interface ChirpFeatures { nameBytes?: number; nameEncoding?: 'gbk' | 'gb2312'; bounds: [number, number]; nameLength: number; characters: string; modes: string[]; bands: [number, number][]; powers: string[]; steps: number[]; skips: string[]; tones: number[]; dtcs: number[]; hasSettings: boolean; hasStep: boolean }
 export interface ChirpDocument { schema: 'radio-workbench-chirp-v1'; model: ChirpModel; driverRevision: string; features: ChirpFeatures; channels: ChirpChannel[]; settings: SettingNode[]; image: string; firmware: string; settingsLimited: boolean; settingsCoverage?: 'basic' | 'channels' | 'driver' }
 export interface ChirpDraft { document: ChirpDocument; channels: ChirpChannel[]; settings: SettingEdits; name: string }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -61,6 +62,7 @@ export function channelIssues(channels: ChirpChannel[], f: ChirpFeatures, origin
     if (!Number.isInteger(c.number) || c.number < f.bounds[0] || c.number > f.bounds[1]) issues.push(`信道 ${c.number} 超出编号范围`);
     if (c.empty) continue;
     if (!original.some(old => old.number === c.number && old.name === c.name) && (c.name.length > f.nameLength || [...c.name].some(char => !f.characters.includes(char)))) issues.push(`信道 ${c.number} 名称超出长度或字符范围`);
+    if (f.nameBytes && !original.some(old => old.number === c.number && old.name === c.name)) { try { encodeName(c.name,f.nameBytes); } catch(e) { issues.push(`信道 ${c.number} ${(e as Error).message}`); } }
     if (!Number.isFinite(Number(c.rx)) || Number(c.rx) <= 0 || !f.bands.some(([lo, hi]) => Number(c.rx) * 1e6 >= lo && Number(c.rx) * 1e6 < hi)) issues.push(`信道 ${c.number} 接收频率超出范围`);
     if (c.tx && (!Number.isFinite(Number(c.tx)) || Number(c.tx) <= 0)) issues.push(`信道 ${c.number} 发射频率无效`);
     else if (c.tx && !f.bands.some(([lo,hi]) => Number(c.tx)*1e6>=lo && Number(c.tx)*1e6<hi)) issues.push(`信道 ${c.number} 发射频率超出范围`);
@@ -122,4 +124,14 @@ export function importChirpTable(data: ArrayBuffer, f: ChirpFeatures): ChirpChan
     return result;
   }
   throw new Error('找不到接收频率表头');
+}
+
+/** Re-decode the retained IMG while keeping intentional pending edits and local metadata. */
+export function migrateUv5rhDraft(draft:ChirpDraft,document:ChirpDocument):ChirpDraft {
+ if(draft.document.model!=='uv5rh'||document.model!=='uv5rh')throw Error('名称迁移型号不匹配');
+ const old=new Map(draft.document.channels.map(c=>[c.number,c])),decoded=new Map(document.channels.map(c=>[c.number,c]));
+ return {...draft,document,channels:draft.channels.map(channel=>{
+  const before=old.get(channel.number),fresh=decoded.get(channel.number);
+  return before&&fresh&&channel.name===before.name?{...channel,name:fresh.name}:channel;
+ })};
 }

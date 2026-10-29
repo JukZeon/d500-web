@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-29",
+  "model": "Baofeng UV-5RH ordinary Chinese-capable unit",
+  "nameEncoding": "GBK",
+  "nameFieldBytes": 12,
+  "testChannel": 1000,
+  "testString": "中文名称测试",
+  "testBlock": "0x7CC0",
+  "chineseWriteReadConfirmed": true,
+  "fullRestoreWriteBlocks": 526,
+  "restoredImageBytes": 33664,
+  "originalActiveChannels": 134,
+  "restoredActiveChannels": 134,
+  "restoredByteDifferences": 0,
+  "testSlotEmptyAfterRestore": true,
+  "browserRealReadConfirmed": true,
+  "browserReadActiveChannels": 134,
+  "browserReadBytes": 33664,
+  "browserReadMatchesRestoredImage": true,
+  "note": "An isolated all-FF block write did not erase the test record; full original-image upload restored it. Partial upload remains disabled."
+}

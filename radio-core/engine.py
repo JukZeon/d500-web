@@ -16,10 +16,11 @@ from chirp import settings as cs
 from chirp.drivers import uv5r, uvk5, uvk5_egzumer, uvk5_cn, baofeng_uv17Pro
 
 from losehu import LosehuRadio
+from uv5rh import UV5RHRadio
 
 DRIVERS = {
     'uv5r': uv5r.BaofengUV5R,
-    'uv5rh': baofeng_uv17Pro.UV5RH,
+    'uv5rh': UV5RHRadio,
     'uvk5-stock': uvk5.UVK5Radio,
     'uvk5-losehu': LosehuRadio,
     'uvk5-egzumer': uvk5_egzumer.UVK5RadioEgzumer,
@@ -40,7 +41,8 @@ def features(radio):
                 bands=f.valid_bands, powers=[str(p) for p in f.valid_power_levels],
                 steps=f.valid_tuning_steps, skips=f.valid_skips,
                 tones=list(cc.TONES), dtcs=list(f.valid_dtcs_codes),
-                hasSettings=f.has_settings, hasStep=f.has_tuning_step)
+                hasSettings=f.has_settings, hasStep=f.has_tuning_step,
+                **({'nameBytes': radio.NAME_BYTES, 'nameEncoding': radio.NAME_ENCODING} if hasattr(radio, 'NAME_BYTES') and hasattr(radio, 'NAME_ENCODING') else {}))
 
 
 def field_value(value):
@@ -163,6 +165,13 @@ def apply_memory(radio, data):
     if before is None or name != before['name']:
         if len(name) > f.valid_name_length or any(c not in f.valid_characters for c in name):
             raise ValueError('信道名称超出该型号的长度或字符范围')
+    if hasattr(radio, 'NAME_BYTES') and (before is None or name != before['name']):
+        try:
+            encoded_name = name.encode(radio.NAME_ENCODING)
+        except UnicodeEncodeError as error:
+            raise ValueError('信道名称含有不支持的字符') from error
+        if len(encoded_name) > radio.NAME_BYTES:
+            raise ValueError(f'信道名称占 {len(encoded_name)} 字节，最多 {radio.NAME_BYTES} 字节')
     mem.name = name
     mem.freq = cc.parse_freq(data['rx'])
     tx = data['tx']

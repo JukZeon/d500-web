@@ -135,4 +135,11 @@ describe('shared channel library and cross-model plans',()=>{
   expect(compatibleName('U段中继','uv5r',1)).toBe('U001');expect(compatibleName('V段中继','uv5r',5)).toBe('V005');
  });
 
+ it('adapts UV-5RH names using GBK bytes instead of replacing Chinese with ASCII aliases',()=>{
+  const plan=planTransfer([{...row(),name:'中文名称测试'}],'uv5rh',[],{mode:'append'});
+  expect(plan[0].errors).toEqual([]);expect(plan[0].channel.name).toBe('中文名称测试');
+  expect(compatibleName('一二三四五六七','uv5rh',1)).toBe('一二三四五六');
+  expect(compatibleName('一二三四五六七','uvk5-losehu',1)).toBe('一二三四五六');
+ });
+
 });

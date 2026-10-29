@@ -7,7 +7,7 @@ are deliberately NOT exposed here. No calibration, passwords, locks or boot
 code are editable. Byte offsets must not be inferred from OEM settings.
 """
 import re
-from chirp.drivers.uvk5_cn import UVK5LoseHuRadio
+from chirp.drivers.uvk5_cn import UVK5LoseHuRadio, NAME_BYTES as LOSEHU_NAME_BYTES
 from chirp.settings import (RadioSetting, RadioSettingGroup,
                             RadioSettingValueInteger, RadioSettingValueBoolean, RadioSettingValueList)
 
@@ -52,6 +52,8 @@ BY_KEY['beep'] = ('beep', '按键音', 0xE90, 1, 0)
 
 
 class LosehuRadio(UVK5LoseHuRadio):
+    NAME_BYTES = LOSEHU_NAME_BYTES
+    NAME_ENCODING = 'gb2312'
     @property
     def basic_settings_supported(self):
         # Reference capture 131HS and 132 family use the audited layout.

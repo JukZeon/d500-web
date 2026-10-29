@@ -9,7 +9,9 @@ function server(change) {
   };
 }
 test('checks the real module MIME contract, including both mjs files', async () => {
-  assert.equal((await verifyRadioAssets('https://example.org/', server())).length, 10);
+  const resources = await verifyRadioAssets('https://example.org/', server());
+  assert.equal(resources.length, 11);
+  assert.ok(resources.includes('radio/uv5rh.py'));
 });
 test('rejects the production regression: 200 octet-stream for mjs', async () => {
   await assert.rejects(verifyRadioAssets('https://example.org/', server(name => name.endsWith('.mjs') ? new Response(null, {headers:{'content-type':'application/octet-stream'}}) : undefined)), /invalid module MIME/);

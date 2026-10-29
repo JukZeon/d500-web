@@ -5,7 +5,7 @@ export function decodeName(bytes: number[]): string {
   const end = bytes.findIndex(v => v === 255 || v === 0);
   return decoder.decode(new Uint8Array(end < 0 ? bytes : bytes.slice(0, end)));
 }
-export function encodeName(text: string): number[] {
+export function encodeName(text: string, maxBytes = MAX_NAME_BYTES): number[] {
   if (!reverseGbk) {
     reverseGbk = new Map();
     for (let i = 0; i < 128; i++) reverseGbk.set(String.fromCharCode(i), [i]);
@@ -24,6 +24,6 @@ export function encodeName(text: string): number[] {
     if (!bytes || char === '\0' || /[\r\n\t]/.test(char)) throw new Error(`名称包含电台不支持的字符“${char}”`);
     out.push(...bytes);
   }
-  if (out.length > MAX_NAME_BYTES) throw new Error(`名称占 ${out.length} 字节，最多 ${MAX_NAME_BYTES} 字节`);
+  if (out.length > maxBytes) throw new Error(`名称占 ${out.length} 字节，最多 ${maxBytes} 字节`);
   return out;
 }

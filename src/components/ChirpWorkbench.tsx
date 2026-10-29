@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Cable, Download, FileCode2, FileSpreadsheet, GitBranch, HardDrive, Library, Menu, Plus, Save, Upload, X } from 'lucide-react';
-import { RADIO_MODELS, channelIssues, editedChannels, importChirpTable, isChirpDocument, parseChirpDraft, type ChirpModel, type ChirpDraft, type ChirpDocument, type ChirpChannel, type SettingEdits, type SettingNode } from '../lib/chirp';
+import { RADIO_MODELS, channelIssues, editedChannels, importChirpTable, isChirpDocument, parseChirpDraft, migrateUv5rhDraft, type ChirpModel, type ChirpDraft, type ChirpDocument, type ChirpChannel, type SettingEdits, type SettingNode } from '../lib/chirp';
 import { download, parseProject } from '../lib/project';
 import { parseDat } from '../lib/dat';
 import { ChirpRuntime, directRadioSupported } from '../lib/chirp-runtime';
 import { serialApi, type SerialPortLike } from '../lib/serial';
 import { useAutosave } from '../lib/use-autosave';
-import { applyChirpTransfer, channelIdentity, chirpStorage, managedChirp, managedD500, offlineDraft, parseLibrary, replaceChirpChannels } from '../lib/shared-channels';
+import { applyChirpTransfer, baselineFeatures, channelIdentity, chirpStorage, managedChirp, managedD500, offlineDraft, parseLibrary, replaceChirpChannels } from '../lib/shared-channels';
 import ChannelEditor from './ChannelEditor';
 import { useSharedProfile } from '../lib/shared-context';
 import WorkspaceNav, { VIEW_LABELS, type WorkbenchView } from './WorkspaceNav';
@@ -35,7 +35,7 @@ export function SettingsTree({ nodes, edits, onChange, disabled }: { nodes: Sett
     })}</span></label>)}</>;
 }
 function initial(model:ChirpModel):ChirpDraft {
- try {const saved=localStorage.getItem(chirpStorage(model));if(saved)return parseChirpDraft(saved,model);}catch{/* Keep a damaged saved draft untouched until the user imports a replacement. */}
+ try {const saved=localStorage.getItem(chirpStorage(model));if(saved){const draft=parseChirpDraft(saved,model);if(!draft.document.image)return {...draft,document:{...draft.document,features:baselineFeatures(model)}};if(model==='uvk5-losehu')return {...draft,document:{...draft.document,features:{...draft.document.features,nameBytes:13,nameEncoding:'gb2312'}}};return draft;}}catch{/* Keep a damaged saved draft untouched until the user imports a replacement. */}
  return offlineDraft(model);
 }
 export default function ChirpWorkbench({ model, switcher, onBusy, view, onView }: { model:ChirpModel; switcher:ReactNode; onBusy:(busy:boolean)=>void; view:WorkbenchView; onView:(view:WorkbenchView)=>void }) {
@@ -44,6 +44,7 @@ export default function ChirpWorkbench({ model, switcher, onBusy, view, onView }
  const [message,setMessage]=useState(''),[error,setError]=useState(false),[group,setGroup]=useState('*');
  const [exportOpen,setExportOpen]=useState(false);
  const [pending,setPending]=useState<{channels:ChirpChannel[];name:string}|null>(null),[paste,setPaste]=useState<string|null>(null);
+ const migrated=useRef(false);
  const port=useRef<SerialPortLike|null>(null),runtime=useRef(new ChirpRuntime()),file=useRef<HTMLInputElement>(null);
  const entry=RADIO_MODELS.find(m=>m.id===model)!,f=draft.document.features,channels=managedChirp(draft.channels,model),groups=[...new Set(channels.map(c=>c.group).filter(Boolean))].sort();
  const saving=useAutosave(chirpStorage(model),draft);
@@ -55,6 +56,15 @@ export default function ChirpWorkbench({ model, switcher, onBusy, view, onView }
  const redo=()=>{if(!future.length)return;setPast([...past,draft]);setDraft(future[0]);setFuture(future.slice(1));};
  useEffect(()=>{onBusy(busy);return()=>onBusy(false);},[busy,onBusy]);
  useEffect(()=>()=>runtime.current.dispose(),[]);
+ useEffect(()=>{
+  if(model!=='uv5rh'||!draft.document.image||f.nameEncoding==='gbk'||migrated.current)return;
+  migrated.current=true;setBusy(true);tell('更新名称解码…');
+  void runtime.current.execute<ChirpDocument>({action:'image',model,image:draft.document.image}).then(document=>{
+   if(document.features.nameEncoding!=='gbk')throw Error('请刷新页面以载入中文驱动');
+   commit(migrateUv5rhDraft(draft,document));tell('名称解码已更新');
+  }).catch(e=>tell((e as Error).message,true)).finally(()=>setBusy(false));
+ },[model,draft.document.image,f.nameEncoding]);
+
  useEffect(()=>{
   const handler=(event:KeyboardEvent)=>{if(!(event.ctrlKey||event.metaKey)||busy||view==='library'||document.querySelector('[role="dialog"]'))return;const editing=event.target instanceof HTMLElement&&['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName);if(event.key.toLowerCase()==='s'){event.preventDefault();download(JSON.stringify(draft,null,2),draft.name+'.radio.json','application/json');}if(event.key.toLowerCase()==='z'&&!editing){event.preventDefault();if(event.shiftKey)redo();else undo();}};
   window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);
@@ -80,7 +90,7 @@ export default function ChirpWorkbench({ model, switcher, onBusy, view, onView }
    const retained=!draft.document.image&&channels.length;
    acceptDocument(result,action==='write'?draft.name:undefined);
    tell(action==='read'?`读取完成${retained?`，保留 ${retained} 条信道编辑`:''}`:'写入完成');if(action==='read')onView('channels');
-  }catch(e){if((e as Error).name!=='NotFoundError')tell((e as Error).message,true);}finally{setBusy(false);}
+  }catch(e){if((e as Error).name==='NotFoundError')tell('已取消');else tell((e as Error).message,true);}finally{setBusy(false);}
  }
  async function exportFile(kind:'project'|'image'){
   if(kind==='project'){download(JSON.stringify(draft,null,2),draft.name+'.radio.json','application/json');return;}
@@ -119,7 +129,7 @@ export default function ChirpWorkbench({ model, switcher, onBusy, view, onView }
     {message&&<div role={error?'alert':'status'} className={`chirp-message ${error?'error':''}`}>{message}<button className="icon-btn" aria-label="关闭提示" onClick={()=>setMessage('')}><X size={14}/></button></div>}
     {pending&&<section className="chirp-import"><strong>导入 {pending.channels.length} 条信道</strong><div className="chirp-preview">{pending.channels.slice(0,100).map(c=><div key={c.number}><span>{c.number}</span><strong>{c.name||'未命名'}</strong><span className="mono">{c.rx} → {c.tx||'仅接收'}</span></div>)}</div><div className="chirp-actions"><button className="btn" onClick={()=>setPending(null)}>取消</button><button className="btn" onClick={()=>acceptTable(false)}>按编号合并</button><button className="btn primary" onClick={()=>acceptTable(true)}>替换信道</button></div></section>}
     {view==='library'&&<SharedLibraryPanel/>}
-    {view==='channels'&&<><ChannelEditor channels={channels} model={model} features={f} original={draft.document.channels} disabled={busy} groupFilter={group} onGroupFilter={setGroup} onChange={rows=>commit({...draft,channels:replaceChirpChannels(draft.channels,rows,f)})} onStore={shared.store} onTransfer={shared.transfer} undo={undo} redo={redo} canUndo={!!past.length} canRedo={!!future.length} extra={row=>{const channel=draft.channels.find(c=>c.number===row.number);return channel?.extra.length?<details><summary>机型参数</summary><SettingsTree nodes={channel.extra} edits={channel.extraEdits??{}} disabled={busy} onChange={extraEdits=>commit({...draft,channels:draft.channels.map(c=>c.number===row.number?{...c,extraEdits}:c)})}/></details>:null;}}/><div className="channel-bottom-actions"><button className="text-btn" onClick={()=>setPaste('')}>粘贴表格</button><span className="chirp-muted">{f.bounds[0]}–{f.bounds[1]} · 名称 {f.nameLength} 位</span></div></>}
+    {view==='channels'&&<><ChannelEditor channels={channels} model={model} features={f} original={draft.document.channels} disabled={busy} groupFilter={group} onGroupFilter={setGroup} onChange={rows=>commit({...draft,channels:replaceChirpChannels(draft.channels,rows,f)})} onStore={shared.store} onTransfer={shared.transfer} undo={undo} redo={redo} canUndo={!!past.length} canRedo={!!future.length} extra={row=>{const channel=draft.channels.find(c=>c.number===row.number);return channel?.extra.length?<details><summary>机型参数</summary><SettingsTree nodes={channel.extra} edits={channel.extraEdits??{}} disabled={busy} onChange={extraEdits=>commit({...draft,channels:draft.channels.map(c=>c.number===row.number?{...c,extraEdits}:c)})}/></details>:null;}}/><div className="channel-bottom-actions"><button className="text-btn" onClick={()=>setPaste('')}>粘贴表格</button><span className="chirp-muted">{f.bounds[0]}–{f.bounds[1]} · 名称 {f.nameBytes?`${f.nameBytes} 字节`: `${f.nameLength} 位`}</span></div></>}
     {view==='spectrum'&&<FrequencyPanel channels={channels} onOpen={()=>onView('channels')}/>}
     {view==='settings'&&<section className="chirp-settings"><h2>电台设置</h2>{!draft.document.image?<div className="channel-empty"><h3>载入这台电台的配置</h3><p>读取电台或导入 IMG，编辑对应的整机设置。</p><button className="btn" onClick={()=>onView('radio')}>读取电台</button><button className="btn" onClick={()=>file.current?.click()}>导入 IMG</button></div>:<>{draft.document.settingsLimited&&<p className="chirp-message">{draft.document.settingsCoverage==='basic'?'基本设置可编辑，其余配置保留。':'该版本暂支持信道编辑。'}</p>}<SettingsTree nodes={draft.document.settings} edits={draft.settings} disabled={busy} onChange={settings=>commit({...draft,settings})}/></>}</section>}
     {view==='files'&&<section className="file-list"><article><FileCode2 size={22}/><div><h2>整机镜像 IMG</h2><p>{draft.document.image?'信道与机型配置':'尚未载入整机配置'}</p></div><button className="btn" onClick={()=>file.current?.click()}>导入文件</button><button className="btn" disabled={!draft.document.image||busy} onClick={()=>void exportFile('image')}>导出 IMG</button></article><article><HardDrive size={22}/><div><h2>完整方案</h2><p>信道、设置修改、分组与备注</p></div><button className="btn" onClick={()=>void exportFile('project')}>下载备份</button></article><article><Library size={22}/><div><h2>共享信道库</h2><p>跨型号管理信道</p></div><button className="btn" onClick={()=>onView('library')}>打开信道库</button></article><article><FileSpreadsheet size={22}/><div><h2>表格导入</h2><p>XLSX / CSV / TSV</p></div><button className="btn" onClick={()=>file.current?.click()}>选择表格</button><button className="btn" onClick={()=>setPaste('')}>粘贴表格</button></article><article><Plus size={22}/><div><h2>新建方案</h2></div><button className="btn" onClick={()=>{commit(offlineDraft(model));onView('channels');}}>新建</button></article></section>}

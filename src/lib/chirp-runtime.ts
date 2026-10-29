@@ -13,6 +13,7 @@ export class BrowserRadioPort {
   private changed?: () => void;
   private failed?: Error;
   private closed = false;
+  private lastReceivedAt = Date.now();
   private pumpTask: Promise<void>;
   constructor(private port: SerialPortLike, private trace: (entry: TraceEntry) => void) {
     if (!port.readable || !port.writable) throw new Error('串口没有可用的数据通道');
@@ -25,9 +26,20 @@ export class BrowserRadioPort {
         if (result.done) { if(!this.closed) throw new Error('写频线已断开'); break; }
         if (!result.value?.length) continue;
         if (this.bytes.length+result.value.length>65536) throw new Error('串口缓冲区溢出');
-        this.bytes.push(...result.value); this.trace({at:new Date().toISOString(),direction:'RX',hex:hex(result.value)}); this.changed?.();
+        this.lastReceivedAt=Date.now();this.bytes.push(...result.value); this.trace({at:new Date().toISOString(),direction:'RX',hex:hex(result.value)}); this.changed?.();
       }
     } catch(e) { this.failed=e instanceof Error?e:new Error(String(e)); this.changed?.(); }
+  }
+  async prepare(settleMs=500, quietMs=150, limitMs=2500) {
+    const opened=Date.now();
+    while(Date.now()-opened<settleMs || Date.now()-this.lastReceivedAt<quietMs) {
+      if(this.failed)throw this.failed;
+      if(Date.now()-opened>=limitMs)throw new Error('串口接收未稳定');
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+    if(this.failed)throw this.failed;
+    const discarded=this.bytes.length;this.bytes=[];
+    this.trace({at:new Date().toISOString(),direction:'INFO',hex:`连接稳定 · 清理 ${discarded} 字节`});
   }
   async io(request: IoRequest): Promise<{data:number[]} | {written:number}> {
     if (this.failed) throw this.failed;
@@ -70,6 +82,7 @@ export class ChirpRuntime {
         await port.open({baudRate:CHIRP_BAUD[request.model],dataBits:8,stopBits:1,parity:'none',flowControl:'none'});
         try { await port.setSignals?.({dataTerminalReady:true,requestToSend:true,break:false}); transport=new BrowserRadioPort(port,entry=>this.record(entry)); }
         catch(e){await port.close();throw e;}
+        if(request.model==='uv5rh')await transport.prepare();
       }
       this.worker??=new Worker('/radio/worker.js',{type:'module'});
       const worker=this.worker, buffer=new SharedArrayBuffer(65544), control=new Int32Array(buffer,0,2);

@@ -9,6 +9,7 @@ CHIRP 驱动直接随网页发布，在浏览器 Worker 内运行，通过 Web S
 - `worker.js`：固定的驱动入口，用内置 Pyodide 执行；只接受配置操作，不加载用户提供的 Python 脚本。
 - `src/lib/chirp-runtime.ts`：Web Serial、异步接收、共享缓冲区和工作线程之间的同步。不使用 D500 的串口节奏。
 - `losehu.py`：对照固定版本 LOSEHU 固件源码添加基本设置映射。未改动上游驱动 ZIP。
+- `uv5rh.py`：普通 UV-5RH 的 GBK 名称、未修改字节保留及连续写频会话适配，已按实机核对。
 
 Web Serial 需要桌面 Chrome / Edge 和 HTTPS（本机可用 localhost）。Worker 共享缓冲区需要 `Cross-Origin-Opener-Policy: same-origin`、`Cross-Origin-Embedder-Policy: require-corp`。项目开发服务器和 Nginx 示例已包含这些响应头。
 
@@ -19,10 +20,10 @@ Web Serial 需要桌面 Chrome / Edge 和 HTTPS（本机可用 localhost）。Wo
 | 型号／固件 | 信道 | 配置 | 验证 |
 | --- | --- | --- | --- |
 | 宝锋 UV-5R 原版 | 0–127，7 位名称 | CHIRP 驱动提供的设置及信道附加字段 | 上游参考镜像、软件验证；新增网页串口路径待实机 |
-| 宝锋 UV-5RH 普通版 | 1–1000 | 对应 CHIRP 驱动的设置及信道附加字段 | 基于同布局父型号构造的测试镜像；待本型号实机 |
+| 宝锋 UV-5RH 普通版 | 1–1000，12 字节 GBK 名称 | 对应驱动的设置及信道附加字段 | 实机中文写读、526 块完整恢复零字节差异、Chrome 网页实机读取 |
 | 泉盛 UV-K5 / K6 原厂 | 1–200 | 对应驱动设置 | 上游参考镜像；待本项目实机 |
 | 泉盛 UV-K5 / K6 Egzumer | 1–200 | 对应驱动设置 | 上游参考镜像；待本项目实机 |
-| 泉盛 UV-K5 / K6 LOSEHU 扩容版 | 1–200，GB2312 中文名称 | 已匹配 131HS / 132 系列布局时开放基本设置，其他保持 | 256 KB 参考镜像及浏览器编辑、导出字节验证；待本项目实机 |
+| 泉盛 UV-K5 / K6 LOSEHU 扩容版 | 1–200，13 字节 GB2312 名称 | 已匹配 131HS / 132 系列布局时开放基本设置，其他保持 | 256 KB 参考镜像及浏览器编辑、导出字节验证；待本项目实机 |
 
 宝锋 UV-5RH 不等于 GM-5RH、GPS / Pro / Mini、UV-5RM 等近似型号；泉盛原始 K5 系列不能与 UV-K5 V3、UV-K1 等新硬件混用。LOSEHU 是否支持由设备版本返回值与驱动识别规则决定，不能只凭“2 Mbit”推断全部功能都兼容。
 
@@ -51,3 +52,5 @@ Web Serial 需要桌面 Chrome / Edge 和 HTTPS（本机可用 localhost）。Wo
 `vendor/chirp.zip` 包含固定提交的未修改 CHIRP 核心和驱动源码；固定版本、哈希及测试镜像哈希见 `vendor/UPSTREAM.json`。ZIP 内含上游 GPL 许可。Pyodide 版本固定于 package-lock.json，许可及对应源码入口见 PYODIDE-NOTICE.txt。
 
 作者：BA7KTC / JukZeon。
+
+逐型号的独立项目核对、差异与实机证据见 [MODEL_RESEARCH.md](../docs/MODEL_RESEARCH.md)。

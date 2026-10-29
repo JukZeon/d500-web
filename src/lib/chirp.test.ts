@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { channelIssues, fromD500, editedChannels, makeChirpChannel, parseChirpDraft, importChirpTable, type ChirpFeatures, type ChirpDocument, type ChirpDraft } from './chirp';
+import { channelIssues, migrateUv5rhDraft, fromD500, editedChannels, makeChirpChannel, parseChirpDraft, importChirpTable, type ChirpFeatures, type ChirpDocument, type ChirpDraft } from './chirp';
 import { newChannel } from './model';
 import * as XLSX from 'xlsx';
 const f: ChirpFeatures = { bounds:[1,1000],nameLength:7,characters:' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',modes:['FM','NFM'],bands:[[136e6,174e6],[400e6,520e6]],powers:['High','Low','Medium'],steps:[2.5,5,6.25],skips:['','S'],tones:[88.5],dtcs:[23],hasSettings:true,hasStep:false };
@@ -27,6 +27,19 @@ describe('CHIRP model-aware workspaces',()=>{
     const text='信道编号\t名称\t接收频率\t发射频率\n1\tTEST\t439.125\t434.125';
     const bytes=new Uint8Array(2+text.length*2);bytes.set([255,254]);const view=new DataView(bytes.buffer);for(let i=0;i<text.length;i++)view.setUint16(2+i*2,text.charCodeAt(i),true);
     expect(importChirpTable(bytes.buffer,f)[0].name).toBe('TEST');
+  });
+
+  it('checks Chinese names by the target byte budget without truncation',()=>{
+    const features={...f,nameLength:12,characters:f.characters+'中文名称测试一二三四五六七',nameBytes:12,nameEncoding:'gbk' as const};
+    expect(channelIssues([{...channel,name:'中文名称测试'}],features)).toEqual([]);
+    expect(channelIssues([{...channel,name:'一二三四五六七'}],features).some(s=>s.includes('14 字节'))).toBe(true);
+  });
+  it('migrates retained UV-5RH names while preserving explicit pending edits, metadata and settings',()=>{
+    const before={...doc,channels:[{...channel,name:'OLD-BYTES'},{...channel,number:2,name:'OLD-2'}]};
+    const pending={...draft,document:before,channels:[{...before.channels[0],group:'G',libraryId:'one'},{...before.channels[1],name:'EDITED'}],settings:{'/basic/test':[true]}};
+    const decoded={...doc,channels:[{...channel,name:'中文'},{...channel,number:2,name:'名称'}]};
+    const result=migrateUv5rhDraft(pending,decoded);
+    expect(result.channels[0]).toMatchObject({name:'中文',group:'G',libraryId:'one'});expect(result.channels[1].name).toBe('EDITED');expect(result.settings).toEqual(pending.settings);expect(pending.channels[0].name).toBe('OLD-BYTES');
   });
 
 });
